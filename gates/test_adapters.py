@@ -30,6 +30,8 @@ def test_claude_build_command():
     cmd = cc.build_command(DEV_CONFIG, "Test task", FAKE_STEP)
     assert "claude" in cmd[0]
     assert "-p" in cmd
+    assert "--permission-mode" in cmd
+    assert "acceptEdits" in cmd
     assert "--output-format" in cmd
     assert "json" in cmd
     assert "--disallowedTools" in cmd
