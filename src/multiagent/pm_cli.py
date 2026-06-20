@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from .db import StateDB, Task, now_iso
 
 def find_state_db():
-    for p in [Path.cwd()] + list(Path.cwd().parents):
-        for pat in ["**/state.db", ".framework/workflow/state.db"]:
-            m = list(p.glob(pat))
-            if m: return m[0]
-    return Path.cwd() / "state.db"
+    """查找 state.db"""
+    cwd = Path.cwd()
+    for p in [cwd / "state.db", cwd / ".framework" / "workflow" / "state.db"]:
+        if p.exists():
+            return p
+    return cwd / "state.db"
 
 def cmd_init(args):
     """初始化 .pm/ 工作目录"""
@@ -91,10 +92,13 @@ def cmd_submit(args, db=None, auto_run=False, dry_run=False, workflow_path=None)
 
 def find_workflow_yaml():
     """查找默认工作流 YAML"""
-    for p in [Path.cwd()] + list(Path.cwd().parents):
-        for pat in ["**/pm-dev-test.yaml", "architectures/*/workflow/*.yaml"]:
-            m = list(p.glob(pat))
-            if m: return m[0]
+    cwd = Path.cwd()
+    candidates = [
+        cwd / "architectures" / "dev-test-loop" / "workflow" / "pm-dev-test.yaml",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
     return None
 
 def cmd_list(args):
