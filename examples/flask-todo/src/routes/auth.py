@@ -1,5 +1,5 @@
 """Authentication routes"""
-from flask import Blueprint, render_template, request, redirect, session, url_for
+from flask import Blueprint, render_template, request, redirect, session, url_for, flash
 from werkzeug.security import check_password_hash
 from urllib.parse import urlparse
 from ..forms import LoginForm, RegisterForm
@@ -20,6 +20,10 @@ def is_safe_url(target):
 def register():
     form = RegisterForm()
     if form.validate_on_submit():
+        # B-006 FIXED: Check for duplicate email before insert
+        if get_user_by_email(form.email.data):
+            flash("This email is already registered.")
+            return render_template("register.html", form=form)
         create_user(form.email.data, form.password.data)
         return redirect(url_for("auth.login"))
     return render_template("register.html", form=form)
