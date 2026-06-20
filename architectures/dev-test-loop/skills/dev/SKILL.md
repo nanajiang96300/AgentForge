@@ -17,14 +17,21 @@
 
 ### 收到指派后
 
-1. 读取 Issue 中的 PM 分析结论（root_cause、target_module、complexity）
+1. 读取 Issue/PM 分析结论（root_cause、target_module、complexity、task_breakdown）
 2. 读取 `docs/architecture/` 相关架构文档
-3. 创建分支: `git checkout -b bugfix/{issue编号}`
-4. 修改源码
-5. 编译验证: 运行 `scripts/build.sh`
-6. 本地 CI 冒烟测试: 运行编译、语法、格式校验
-7. 提交并 Push: `git push -u origin bugfix/{issue编号}`
-8. 创建 PR（使用 `bugfix_pr.md` 模板），@Test_Agent
+3. **创建任务分支**: 
+   - Bug 修复: `git checkout -b fix/{issue编号}`
+   - 新功能/任务: `git checkout -b task-{task_id}-{short_desc}`（从 PM 的 task_breakdown 中获取 id）
+4. 在隔离分支上修改源码
+5. 本地验证: 编译/运行项目
+6. 提交并 Push
+
+### 项目 Git 规范 (Phase 3)
+
+- 新项目开发从 main 分支开始，每个 task_breakdown 中的任务创建一个独立分支
+- 分支命名: `task-<id>-<description>`（如 `task-1-project-skeleton`）
+- 禁止直接在 main 上开发，禁止跨任务分支工作
+- 任务完成后由 PM/Test 验证再 merge 到 main
 
 ### 被 Test 打回时
 

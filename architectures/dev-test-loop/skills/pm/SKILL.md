@@ -90,6 +90,57 @@
 - 不确定时标记 complex 并注明假设
 - 任务拆解粒度足够细，让 Dev 可以直接逐条执行
 
+## 项目 Git 管理规范 (Phase 3)
+
+PM 负责被开发项目的 Git 仓库管理。这是独立于 Engine 框架自身 Git 的项目级版本控制。
+
+### 项目初始化
+
+当从零开始新项目时：
+1. 在项目根目录（如 `examples/devlog/`）执行 `git init`
+2. 创建初始 commit（至少包含 `README.md` 和项目骨架）
+3. 配置 `.gitignore`（忽略 `__pycache__/`、`.venv/`、`*.db` 等）
+
+### 需求分支策略
+
+每个需求/任务 → 独立分支，禁止直接在 main 上开发：
+
+```
+main
+├── task-1-project-skeleton    → 完成 → merge
+├── task-2-database-layer      → 完成 → merge
+├── task-3-models              → 完成 → merge
+└── ...
+```
+
+### 分支命名规范
+
+- `task-<id>-<short-desc>` — 开发任务分支
+- `fix-<bug-id>-<short-desc>` — Bug 修复分支
+
+### Dev 工作流
+
+1. PM 指派任务 → Dev 从 main 创建 `task-<id>-<desc>` 分支
+2. Dev 在分支上实现功能 + 编写测试
+3. Test Agent 在分支上运行测试
+4. 测试通过 → merge 到 main
+5. 测试失败 → 打回 Dev 在同一分支修复
+6. Merge 后删除开发分支
+
+### PM 检查清单
+
+开始新项目前确认：
+- [ ] `git init` 已完成
+- [ ] `.gitignore` 已配置
+- [ ] 初始 main 分支 commit 已创建
+- [ ] 第一个任务分支已从 main 创建
+
+### 与 Engine 项目的隔离
+
+- Engine 项目 git（`/home/nanajiang/projects/MutiAgent/`）由 Human 管理
+- 被开发项目 git（如 `examples/devlog/`）由 PM 管理
+- 两者完全独立，互不干扰
+
 ## "Act, don't ask"
 
 - 不要在 Issue 评论中问开放性问题
