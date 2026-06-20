@@ -33,14 +33,25 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = get_user_by_email(form.email.data)
-        # B-002 FIXED: Use password hash verification
-        if user and check_password_hash(user["password"], form.password.data):
-            session["user_id"] = user["id"]
-            # B-003 FIXED: Validate redirect URL before redirecting
-            next_page = request.args.get("next")
-            if next_page and is_safe_url(next_page):
-                return redirect(next_page)
-            return redirect(url_for("todos.list_todos"))
+        if user:
+            pw = user["password"]
+            authenticated = False
+            # B-007 FIXED: Handle plaintext→hash migration for pre-B-002 users
+            if pw.startswith("scrypt:"):
+                authenticated = check_password_hash(pw, form.password.data)
+            elif pw == form.password.data:
+                # Plaintext password from before B-002 — upgrade to hash
+                from ..models import upgrade_password
+                upgrade_password(user["id"], form.password.data)
+                authenticated = True
+
+            if authenticated:
+                session["user_id"] = user["id"]
+                next_page = request.args.get("next")
+                if next_page and is_safe_url(next_page):
+                    return redirect(next_page)
+                return redirect(url_for("todos.list_todos"))
+            flash("Invalid email or password.")
     return render_template("login.html", form=form)
 
 @auth_bp.route("/logout")

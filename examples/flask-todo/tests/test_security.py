@@ -50,6 +50,25 @@ def test_csrf_enabled():
     os.unlink(db_path)
     assert r.status_code != 302, "B-004 FAIL: Form accepted without CSRF token"
 
+def test_plaintext_password_migration(client):
+    """B-007 FIXED: Pre-B-002 plaintext passwords auto-upgrade on login"""
+    from src.db import get_db
+    # Insert a user with plaintext password (simulating pre-B-002 state)
+    with client.application.app_context():
+        db = get_db()
+        db.execute("INSERT INTO users (email, password) VALUES (?, ?)",
+                   ("olduser@test.com", "plainpass"))
+        db.commit()
+    # Try to login — should auto-upgrade
+    r = client.post("/login", data={"email": "olduser@test.com", "password": "plainpass"}, follow_redirects=True)
+    assert r.status_code == 200
+    assert b"Login" not in r.data  # Not redirected back to login → success
+    # Verify password was upgraded to hash
+    with client.application.app_context():
+        db = get_db()
+        user = db.execute("SELECT password FROM users WHERE email = ?", ("olduser@test.com",)).fetchone()
+        assert user["password"].startswith("scrypt:"), f"Password not upgraded: {user['password'][:20]}"
+
 def test_list_shows_only_own_todos(client):
     """B-005 FIXED: User should only see their own todos"""
     client.post("/register", data={"email": "alice@t.com", "password": "pa"})

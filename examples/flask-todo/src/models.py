@@ -17,6 +17,13 @@ def get_user_by_id(user_id):
     db = get_db()
     return db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
+def upgrade_password(user_id, plaintext_password):
+    """B-007: Migrate plaintext password to hashed on successful login"""
+    db = get_db()
+    db.execute("UPDATE users SET password = ? WHERE id = ?",
+               (generate_password_hash(plaintext_password), user_id))
+    db.commit()
+
 def create_todo(user_id, title):
     db = get_db()
     db.execute("INSERT INTO todos (user_id, title) VALUES (?, ?)", (user_id, title))
