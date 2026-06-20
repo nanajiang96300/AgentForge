@@ -20,6 +20,7 @@ MODULES = [
     ("DB: CRUD + Dedup", "test_db.py"),
     ("Adapters: CLI + Config", "test_adapters.py"),
     ("Orchestrator: Workflow Engine", "test_orchestrator.py"),
+    ("Engine CLI: run command", "test_engine_cli.py"),
 ]
 
 def run_module(path, timeout=30):
