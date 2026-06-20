@@ -1,0 +1,95 @@
+# PM→Dev→Test 工作流定义
+# Phase 2: PM 分析需求 → Dev 实现 → Test 验证
+
+workflow:
+  id: "pm-dev-test-loop"
+  version: "2.0"
+  description: "PM analyzes requirements -> Dev implements -> Test verifies"
+
+  trigger:
+    type: "pm.cli.submit"
+
+  steps:
+    # ═══ Step 1: PM 需求分析 ═══
+    - id: "pm_analyze"
+      agent: "pm"
+      description: "分析需求文档，定位目标模块，拆解开发任务，评估复杂度"
+      timeout: 300
+      retry:
+        max: 2
+        backoff: "exponential"
+      input:
+        from: "task.context"
+        fields:
+          - "requirements_text"
+          - "source_file"
+      output:
+        required:
+          - "root_cause"
+          - "target_module"
+          - "complexity"
+          - "task_breakdown"
+          - "estimated_files"
+      on_success:
+        to_state: "assigned"
+      on_failure:
+        retry: true
+        escalate_on_exhaust: true
+
+    # ═══ Step 2: Dev 实现 ═══
+    - id: "dev_fix"
+      agent: "dev"
+      description: "根据 PM 分析结论实现功能或修复 Bug"
+      depends_on: "pm_analyze"
+      timeout: 600
+      retry:
+        max: 3
+        backoff: "exponential"
+      input:
+        from: "pm_analyze.output"
+        fields:
+          - "root_cause"
+          - "target_module"
+          - "complexity"
+          - "task_breakdown"
+          - "estimated_files"
+      output:
+        required:
+          - "branch_name"
+          - "files_changed"
+      guard:
+        forbidden_paths:
+          - "tests/"
+      on_success:
+        action: "transition_to_in_review"
+      on_failure:
+        retry: true
+        escalate_on_exhaust: true
+
+    # ═══ Step 3: Test 验证 ═══
+    - id: "test_verify"
+      agent: "test"
+      description: "拉取分支，运行测试套件，输出判决"
+      depends_on: "dev_fix"
+      timeout: 300
+      input:
+        from: "dev_fix.output"
+        fields:
+          - "branch_name"
+          - "files_changed"
+      output:
+        required:
+          - "verdict"
+          - "test_summary"
+      on_verdict_approved:
+        action: "mark_complete"
+      on_verdict_rejected:
+        next: "dev_fix"
+        increment_rejection: true
+        guard: "rejection_count < 3"
+
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"
+    on_escalation:
+      action: "log_and_stop"

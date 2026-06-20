@@ -49,6 +49,47 @@
 | 创建/修改 Git Issue | Git push |
 | 读取 `src/`、`tests/`、`scripts/` | 修改 `scripts/` |
 
+## 需求分析模式 (Phase 2)
+
+当收到需求文档（不是 Bug Issue）时，从零开始分析功能需求：
+
+1. 阅读 `requirements_text` 中的完整需求描述
+2. 阅读项目现有源码和架构文档理解项目结构
+3. 确定受影响的目标模块（target_module）
+4. 拆解为具体开发任务清单（task_breakdown）
+5. 评估复杂度（trivial/simple/medium/complex）
+6. 估算需要修改的文件（estimated_files）
+
+### 复杂度路由
+
+| 复杂度 | 策略 |
+|--------|------|
+| `trivial` | 单文件修改，< 20 行代码 |
+| `simple` | 2-3 文件，纯逻辑修改 |
+| `medium` | 多个文件，涉及新功能 |
+| `complex` | 架构改动，涉及新模块 |
+
+### 输出格式
+
+必须输出结构化 JSON：
+```json
+{
+  "root_cause": "需求分析摘要",
+  "target_module": "受影响模块列表",
+  "complexity": "simple|medium|complex",
+  "task_breakdown": [
+    {"id": "1", "description": "子任务描述", "target_file": "文件路径", "effort": "预估工作量"}
+  ],
+  "estimated_files": ["文件1", "文件2"]
+}
+```
+
+约束：
+- 严格只做分析，不写代码
+- 分析必须具体到文件级别
+- 不确定时标记 complex 并注明假设
+- 任务拆解粒度足够细，让 Dev 可以直接逐条执行
+
 ## "Act, don't ask"
 
 - 不要在 Issue 评论中问开放性问题

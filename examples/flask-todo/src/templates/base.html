@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><title>Todo App</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:2rem auto}
+.flash{color:red}.todo-item{display:flex;justify-content:space-between;padding:.5rem;border-bottom:1px solid #eee}</style>
+</head>
+<body>
+{% with messages = get_flashed_messages() %}{% for m in messages %}<p class="flash">{{m}}</p>{% endfor %}{% endwith %}
+{% block content %}{% endblock %}
+</body>
+</html>
