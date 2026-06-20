@@ -627,7 +627,7 @@ graph LR
     P0["Phase 0<br/>基础设施"] --> P1["Phase 1<br/>Dev + Test"]
     P1 --> P1B["Phase 1B<br/>测试项目验证"]
     P1B --> P2["Phase 2<br/>+ PM Agent"]
-    P2 --> P3["Phase 3<br/>+ User Agent"]
+    P2 --> P3["Phase 3<br/>Engine 生产化"]
     P3 --> P4["Phase 4<br/>+ Conductor + Discord"]
 
     style P0 fill:#e0e0e0
@@ -809,18 +809,33 @@ PM 自动分析 Issue、拆解任务、指派 Dev。
 
 ---
 
-### Phase 3：接入 User Agent + 业务闭环（预计 4-5 天）
+### Phase 3：Engine 生产化（预计 3-4 天）
 
-User Agent 驱动项目工具链，异常时自动触发基建闭环。
+> **2026-06-20 调整**：原计划接入 AI User Agent，但 Phase 2 实践表明 Human-as-user + PM→Dev→Test 闭环已跑通，AI User Agent 与 Human + Test Agent 高度重叠。Phase 3 重心调整为 **Engine 生产化**：让 AgentSpawner 成为所有 Agent 调用的唯一入口，自动记录 metrics，支持并行工作流。User Agent 角色定义保留为框架骨架。
+
+**核心目标**：Engine 从"代码存在但未使用"变成"生产可用的 Agent 调度层"。
+
+#### 关键改造
+
+| 改造项 | 当前状态 | 目标状态 |
+|--------|---------|---------|
+| Agent 调用入口 | 手动 `claude -p` | 全部通过 AgentSpawner |
+| Metrics 记录 | 手动统计 | 自动写入 agent_metrics 表 |
+| PM CLI | 直接 spawn 进程 | 调用 Orchestrator.run() |
+| 并行执行 | 不支持 | fan-out 多步骤并行 |
+| 心跳监控 | 代码存在未验证 | 实际检测 + 自动重试 |
+| 崩溃恢复 | 代码存在未验证 | 实际断点续传测试 |
 
 #### 🔍 门禁 3（6 项）
 
 | # | 检查项 | 通过标准 |
 |---|---|---|
-| 3.1 | 多路并行执行 | 多 Agent 同时启动，不排队 |
-| 3.2 | 异常上报触发基建 | 工具链崩溃→Issue→PM→Dev |
-| 3.3 | 基建修复后业务恢复 | Merge 后 User Agent 自动拉取 |
-| 3.4 | 并行超时处理 | 某路超时不影响其他路 |
+| 3.1 | Engine 驱动完整流程 | `multiagent run` 执行 PM→Dev→Test，agent_metrics 表有完整记录 |
+| 3.2 | 并行步骤执行 | 两个独立 Agent 同时运行，不互相阻塞，metrics 各自独立 |
+| 3.3 | 心跳丢失恢复 | kill Agent 进程 → Engine 检测 lost → 自动重试 |
+| 3.4 | Engine 崩溃恢复 | kill Engine → 重启后从 state.db 断点续传 |
+| 3.5 | Metrics 自动记录 | 每次 Agent 调用自动写入，`multiagent metrics` 可查询 |
+| 3.6 | PM CLI 走 Engine | `multiagent pm submit` 的 Agent 调用经过 AgentSpawner.monitor() |
 
 ---
 
