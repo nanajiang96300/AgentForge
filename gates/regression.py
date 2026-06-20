@@ -22,6 +22,7 @@ MODULES = [
     ("Orchestrator: Workflow Engine", "test_orchestrator.py"),
     ("Engine CLI: run command", "test_engine_cli.py"),
     ("PM Engine: submit via Engine", "test_pm_engine.py"),
+    ("Parallel: fan-out execution", "test_parallel.py"),
 ]
 
 def run_module(path, timeout=30):

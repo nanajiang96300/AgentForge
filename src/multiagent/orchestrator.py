@@ -10,6 +10,8 @@ WorkflowOrchestrator — 多步骤工作流编排器。
 """
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -63,6 +65,7 @@ class WorkflowOrchestrator:
         self.workflow_def: dict = {}
         self.steps: dict[str, WorkflowStep] = {}
         self._step_results: dict[str, dict] = {}  # step_id → last output
+        self._lock = threading.Lock()  # Protects _step_results in parallel mode
 
     def load(self):
         """加载并验证工作流 YAML"""
@@ -260,8 +263,42 @@ class WorkflowOrchestrator:
         except Exception:
             return True  # 出错时放行
 
+    def _execute_parallel(self, task: Task, steps: list[WorkflowStep]) -> list:
+        """并行执行多个独立步骤，返回结果列表"""
+        results = []
+        with ThreadPoolExecutor(max_workers=len(steps)) as executor:
+            futures = {
+                executor.submit(self._execute_step_safe, task, step): step
+                for step in steps
+            }
+            for future in as_completed(futures):
+                step = futures[future]
+                try:
+                    result = future.result()
+                    results.append((step, result))
+                except Exception as e:
+                    # Step failed catastrophically
+                    from .engine import StepResult, StepStatus
+                    result = StepResult(
+                        step_id=step.id, agent=step.agent,
+                        status=StepStatus.CRASHED, error=str(e),
+                    )
+                    with self._lock:
+                        self._step_results[step.id] = {"error": str(e)}
+                    step.state = StepState.FAILED
+                    results.append((step, result))
+        return results
+
+    def _execute_step_safe(self, task: Task, step: WorkflowStep):
+        """线程安全的步骤执行包装"""
+        # execute_step handles _step_results internally via _handle_result
+        # Use lock only when reading/writing shared state
+        with self._lock:
+            step.state = StepState.RUNNING
+        return self.execute_step(task, step)
+
     def run(self, task: Task) -> dict:
-        """运行完整工作流直到完成或阻塞"""
+        """运行完整工作流直到完成或阻塞。支持并行执行独立步骤。"""
         self.load()
         self._step_results = {}
 
@@ -282,15 +319,36 @@ class WorkflowOrchestrator:
                 # 等待 rejection loop 解决
                 break
 
-            for step in ready:
-                result = self.execute_step(task, step)
+            # Fan-out: 如果多个步骤就绪且互相独立，并行执行
+            if len(ready) > 1 and self._can_parallelize(ready):
+                parallel_results = self._execute_parallel(task, ready)
+                for step, result in parallel_results:
+                    if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
+                        # Rejection breaks the current parallel batch
+                        break
+            else:
+                # Sequential execution
+                for step in ready:
+                    result = self.execute_step(task, step)
 
-                # 如果是 rejection → 跳出当前循环，允许 dev_fix 重新执行
-                if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
-                    break
+                    # 如果是 rejection → 跳出当前循环，允许 dev_fix 重新执行
+                    if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
+                        break
 
         return {
             "task_id": task.id,
             "steps": {sid: s.state.value for sid, s in self.steps.items()},
             "results": self._step_results,
         }
+
+    def _can_parallelize(self, steps: list[WorkflowStep]) -> bool:
+        """检查多个步骤是否可以并行执行（无交叉依赖）"""
+        if len(steps) <= 1:
+            return False
+        step_ids = {s.id for s in steps}
+        for step in steps:
+            for dep_id in step.depends_on:
+                if dep_id in step_ids:
+                    # One of the ready steps depends on another ready step
+                    return False
+        return True

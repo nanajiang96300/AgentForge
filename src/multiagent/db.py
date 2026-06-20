@@ -1,5 +1,5 @@
 """StateDB — SQLite WAL 模式状态持久化 + 指标追踪"""
-import sqlite3, json
+import sqlite3, json, threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +26,13 @@ class AgentMetrics:
 class StateDB:
     def __init__(self, db_path: Path):
         self.db_path = db_path; self.conn: Optional[sqlite3.Connection] = None
+        self._write_lock = threading.Lock()
 
     def connect(self):
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA busy_timeout=5000")  # 5s timeout for concurrent writes
         self._init_schema()
 
     def _init_schema(self):
@@ -66,23 +68,25 @@ class StateDB:
             pass
 
     def insert_task(self, task: Task) -> bool:
-        try:
-            self.conn.execute("""INSERT INTO tasks (id, type, source, workflow_id, current_step,
-                status, retry_count, rejection_count, dedup_key, context, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (task.id, task.type, task.source, task.workflow_id, task.current_step,
-                 task.status, task.retry_count, task.rejection_count,
-                 task.dedup_key, json.dumps(task.context or {}), task.created_at or now_iso()))
-            self.conn.commit(); return True
-        except sqlite3.IntegrityError: return False
+        with self._write_lock:
+            try:
+                self.conn.execute("""INSERT INTO tasks (id, type, source, workflow_id, current_step,
+                    status, retry_count, rejection_count, dedup_key, context, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (task.id, task.type, task.source, task.workflow_id, task.current_step,
+                     task.status, task.retry_count, task.rejection_count,
+                     task.dedup_key, json.dumps(task.context or {}), task.created_at or now_iso()))
+                self.conn.commit(); return True
+            except sqlite3.IntegrityError: return False
 
     def claim_pending_task(self, workflow_id: str) -> Optional[Task]:
-        row = self.conn.execute("""SELECT id, type, source, workflow_id, current_step, status,
-            retry_count, rejection_count, dedup_key, context, created_at, claimed_at, completed_at
-            FROM tasks WHERE workflow_id = ? AND status = 'pending'
-            ORDER BY created_at LIMIT 1""", (workflow_id,)).fetchone()
-        if row is None: return None
-        self.conn.execute("UPDATE tasks SET status = 'running', claimed_at = ? WHERE id = ?",
-                          (now_iso(), row[0])); self.conn.commit()
+        with self._write_lock:
+            row = self.conn.execute("""SELECT id, type, source, workflow_id, current_step, status,
+                retry_count, rejection_count, dedup_key, context, created_at, claimed_at, completed_at
+                FROM tasks WHERE workflow_id = ? AND status = 'pending'
+                ORDER BY created_at LIMIT 1""", (workflow_id,)).fetchone()
+            if row is None: return None
+            self.conn.execute("UPDATE tasks SET status = 'running', claimed_at = ? WHERE id = ?",
+                              (now_iso(), row[0])); self.conn.commit()
         context_val = row[9]
         if isinstance(context_val, str):
             try: context_val = json.loads(context_val)
@@ -93,26 +97,30 @@ class StateDB:
                     created_at=row[10], claimed_at=row[11], completed_at=row[12])
 
     def update_task_status(self, task_id: str, status: str, current_step: Optional[str] = None):
-        fields = ["status = ?"]; params: list[Any] = [status]
-        if current_step: fields.append("current_step = ?"); params.append(current_step)
-        if status == "completed": fields.append("completed_at = ?"); params.append(now_iso())
-        params.append(task_id)
-        self.conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", params)
-        self.conn.commit()
+        with self._write_lock:
+            fields = ["status = ?"]; params: list[Any] = [status]
+            if current_step: fields.append("current_step = ?"); params.append(current_step)
+            if status == "completed": fields.append("completed_at = ?"); params.append(now_iso())
+            params.append(task_id)
+            self.conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", params)
+            self.conn.commit()
 
     def increment_retry(self, task_id: str) -> int:
-        row = self.conn.execute("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ? RETURNING retry_count",
-                                (task_id,)).fetchone()
-        self.conn.commit(); return row[0] if row else 0
+        with self._write_lock:
+            row = self.conn.execute("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ? RETURNING retry_count",
+                                    (task_id,)).fetchone()
+            self.conn.commit(); return row[0] if row else 0
 
     def increment_rejection(self, task_id: str) -> int:
-        row = self.conn.execute("UPDATE tasks SET rejection_count = rejection_count + 1 WHERE id = ? RETURNING rejection_count",
-                                (task_id,)).fetchone()
-        self.conn.commit(); return row[0] if row else 0
+        with self._write_lock:
+            row = self.conn.execute("UPDATE tasks SET rejection_count = rejection_count + 1 WHERE id = ? RETURNING rejection_count",
+                                    (task_id,)).fetchone()
+            self.conn.commit(); return row[0] if row else 0
 
     def set_task_context(self, task_id: str, context: dict):
-        self.conn.execute("UPDATE tasks SET context = ? WHERE id = ?",
-                          (json.dumps(context), task_id)); self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("UPDATE tasks SET context = ? WHERE id = ?",
+                              (json.dumps(context), task_id)); self.conn.commit()
 
     def get_task(self, task_id: str) -> Optional[dict]:
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -127,15 +135,17 @@ class StateDB:
 
     def record_step(self, task_id, step_id, agent, status, output=None, error=None,
                     retry_count=0, started_at=None, completed_at=None, adapter_name="claude-code"):
-        self.conn.execute("""INSERT INTO step_results (task_id, step_id, agent, adapter, status,
-            output, error, retry_count, started_at, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (task_id, step_id, agent, adapter_name, status, json.dumps(output or {}),
-             error, retry_count, started_at, completed_at))
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("""INSERT INTO step_results (task_id, step_id, agent, adapter, status,
+                output, error, retry_count, started_at, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (task_id, step_id, agent, adapter_name, status, json.dumps(output or {}),
+                 error, retry_count, started_at, completed_at))
+            self.conn.commit()
 
     def heartbeat(self, task_id, step_id, agent_pid):
-        self.conn.execute("INSERT OR REPLACE INTO heartbeat (task_id, step_id, agent_pid, last_beat) VALUES (?,?,?,?)",
-                          (task_id, step_id, agent_pid, now_iso())); self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("INSERT OR REPLACE INTO heartbeat (task_id, step_id, agent_pid, last_beat) VALUES (?,?,?,?)",
+                              (task_id, step_id, agent_pid, now_iso())); self.conn.commit()
 
     def get_lost_agents(self, heartbeat_timeout=60) -> list[dict]:
         rows = self.conn.execute("""SELECT task_id, step_id, agent_pid, last_beat FROM heartbeat
@@ -143,13 +153,14 @@ class StateDB:
         return [{"task_id": r[0], "step_id": r[1], "agent_pid": r[2], "last_beat": r[3]} for r in rows]
 
     def record_metrics(self, metrics: AgentMetrics):
-        self.conn.execute("""INSERT INTO agent_metrics (task_id, step_id, agent, adapter, model,
-            duration_ms, duration_api_ms, input_tokens, output_tokens, cache_read_tokens,
-            cost_usd, num_turns, ttft_ms, status, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (metrics.task_id, metrics.step_id, metrics.agent, metrics.adapter, metrics.model,
-             metrics.duration_ms, metrics.duration_api_ms, metrics.input_tokens, metrics.output_tokens,
-             metrics.cache_read_tokens, metrics.cost_usd, metrics.num_turns, metrics.ttft_ms,
-             metrics.status, now_iso())); self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("""INSERT INTO agent_metrics (task_id, step_id, agent, adapter, model,
+                duration_ms, duration_api_ms, input_tokens, output_tokens, cache_read_tokens,
+                cost_usd, num_turns, ttft_ms, status, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (metrics.task_id, metrics.step_id, metrics.agent, metrics.adapter, metrics.model,
+                 metrics.duration_ms, metrics.duration_api_ms, metrics.input_tokens, metrics.output_tokens,
+                 metrics.cache_read_tokens, metrics.cost_usd, metrics.num_turns, metrics.ttft_ms,
+                 metrics.status, now_iso())); self.conn.commit()
 
     def get_metrics_summary(self, agent: Optional[str] = None) -> dict:
         if agent:
