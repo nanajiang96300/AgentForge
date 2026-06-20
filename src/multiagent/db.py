@@ -11,7 +11,8 @@ def now_iso(): return datetime.now(timezone.utc).isoformat()
 class Task:
     id: str; type: str; source: Optional[str]; workflow_id: str
     current_step: Optional[str]; status: str = "pending"
-    retry_count: int = 0; dedup_key: Optional[str] = None
+    retry_count: int = 0; rejection_count: int = 0
+    dedup_key: Optional[str] = None; context: Optional[dict] = None
     created_at: Optional[str] = None; claimed_at: Optional[str] = None
     completed_at: Optional[str] = None
 
@@ -36,7 +37,8 @@ class StateDB:
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, type TEXT NOT NULL, source TEXT,
                 workflow_id TEXT NOT NULL, current_step TEXT, status TEXT DEFAULT 'pending',
-                retry_count INTEGER DEFAULT 0, dedup_key TEXT UNIQUE, context TEXT DEFAULT '{}',
+                retry_count INTEGER DEFAULT 0, rejection_count INTEGER DEFAULT 0,
+                dedup_key TEXT UNIQUE, context TEXT DEFAULT '{}',
                 created_at TEXT, claimed_at TEXT, completed_at TEXT);
             CREATE TABLE IF NOT EXISTS step_results (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL, step_id TEXT NOT NULL, agent TEXT NOT NULL,
@@ -56,25 +58,39 @@ class StateDB:
                 status TEXT DEFAULT 'unknown', recorded_at TEXT, FOREIGN KEY (task_id) REFERENCES tasks(id));
         """)
         self.conn.commit()
+        # Phase 2 migration: add rejection_count to existing DBs
+        try:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN rejection_count INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def insert_task(self, task: Task) -> bool:
         try:
             self.conn.execute("""INSERT INTO tasks (id, type, source, workflow_id, current_step,
-                status, retry_count, dedup_key, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                status, retry_count, rejection_count, dedup_key, context, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (task.id, task.type, task.source, task.workflow_id, task.current_step,
-                 task.status, task.retry_count, task.dedup_key, task.created_at or now_iso()))
+                 task.status, task.retry_count, task.rejection_count,
+                 task.dedup_key, json.dumps(task.context or {}), task.created_at or now_iso()))
             self.conn.commit(); return True
         except sqlite3.IntegrityError: return False
 
     def claim_pending_task(self, workflow_id: str) -> Optional[Task]:
         row = self.conn.execute("""SELECT id, type, source, workflow_id, current_step, status,
-            retry_count, dedup_key, created_at, claimed_at, completed_at FROM tasks
-            WHERE workflow_id = ? AND status = 'pending' ORDER BY created_at LIMIT 1""",
-            (workflow_id,)).fetchone()
+            retry_count, rejection_count, dedup_key, context, created_at, claimed_at, completed_at
+            FROM tasks WHERE workflow_id = ? AND status = 'pending'
+            ORDER BY created_at LIMIT 1""", (workflow_id,)).fetchone()
         if row is None: return None
         self.conn.execute("UPDATE tasks SET status = 'running', claimed_at = ? WHERE id = ?",
                           (now_iso(), row[0])); self.conn.commit()
-        return Task(*row)
+        context_val = row[9]
+        if isinstance(context_val, str):
+            try: context_val = json.loads(context_val)
+            except: pass
+        return Task(id=row[0], type=row[1], source=row[2], workflow_id=row[3],
+                    current_step=row[4], status=row[5], retry_count=row[6],
+                    rejection_count=row[7], dedup_key=row[8], context=context_val,
+                    created_at=row[10], claimed_at=row[11], completed_at=row[12])
 
     def update_task_status(self, task_id: str, status: str, current_step: Optional[str] = None):
         fields = ["status = ?"]; params: list[Any] = [status]
@@ -88,6 +104,21 @@ class StateDB:
         row = self.conn.execute("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ? RETURNING retry_count",
                                 (task_id,)).fetchone()
         self.conn.commit(); return row[0] if row else 0
+
+    def increment_rejection(self, task_id: str) -> int:
+        row = self.conn.execute("UPDATE tasks SET rejection_count = rejection_count + 1 WHERE id = ? RETURNING rejection_count",
+                                (task_id,)).fetchone()
+        self.conn.commit(); return row[0] if row else 0
+
+    def set_task_context(self, task_id: str, context: dict):
+        self.conn.execute("UPDATE tasks SET context = ? WHERE id = ?",
+                          (json.dumps(context), task_id)); self.conn.commit()
+
+    def get_task(self, task_id: str) -> Optional[dict]:
+        row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is None: return None
+        cols = [d[1] for d in self.conn.execute("PRAGMA table_info(tasks)").fetchall()]
+        return dict(zip(cols, row))
 
     def get_running_tasks(self) -> list[Task]:
         return [Task(*row) for row in self.conn.execute(
