@@ -30,10 +30,10 @@ def cmd_init(args):
     print("  outbox/  ← PM 分析结果")
     print("  archive/ ← 已完成任务")
 
-def cmd_submit(args):
-    """提交需求文档"""
+def cmd_submit(args, db=None, auto_run=False, dry_run=False, workflow_path=None):
+    """提交需求文档。如果 auto_run=True，自动通过 Engine 执行工作流。"""
     if len(args) < 1:
-        print("Usage: multiagent pm submit <requirements.md>")
+        print("Usage: multiagent pm submit <requirements.md> [--run] [--dry-run]")
         return 1
     req_path = Path(args[0])
     if not req_path.exists():
@@ -42,7 +42,11 @@ def cmd_submit(args):
 
     requirements = req_path.read_text()
     task_id = f"task-{uuid.uuid4().hex[:8]}"
-    db = StateDB(find_state_db()); db.connect()
+
+    _close_db = False
+    if db is None:
+        db = StateDB(find_state_db()); db.connect()
+        _close_db = True
 
     task = Task(
         id=task_id, type="feature", source="pm",
@@ -57,11 +61,41 @@ def cmd_submit(args):
     inbox_dir.mkdir(parents=True, exist_ok=True)
     (inbox_dir / "requirements.md").write_text(requirements)
 
-    db.close()
     print(f"Task submitted: {task_id}")
     print(f"  Type: feature")
-    print(f"  Status: pending → PM analyzing...")
-    print(f"  Run 'multiagent pm status {task_id}' to check progress")
+    print(f"  Status: pending")
+
+    if auto_run:
+        print(f"  Auto-running workflow...")
+        from .engine_cli import cmd_run
+        wf = workflow_path or find_workflow_yaml()
+        # Pass existing db connection to avoid filesystem search
+        result_task_id = cmd_run(
+            db=db,
+            workflow_path=wf,
+            task_id=task_id,
+            dry_run=dry_run,
+        )
+        if result_task_id:
+            print(f"  Workflow complete. Run 'multiagent pm status {task_id}' for details.")
+        else:
+            print(f"  Workflow failed. Check 'multiagent pm status {task_id}'.")
+    else:
+        print(f"  Run 'multiagent pm status {task_id}' to check progress")
+        print(f"  Run 'multiagent run <workflow.yaml> --task-id {task_id} --dry-run' to execute")
+
+    if _close_db:
+        db.close()
+    return 0
+
+
+def find_workflow_yaml():
+    """查找默认工作流 YAML"""
+    for p in [Path.cwd()] + list(Path.cwd().parents):
+        for pat in ["**/pm-dev-test.yaml", "architectures/*/workflow/*.yaml"]:
+            m = list(p.glob(pat))
+            if m: return m[0]
+    return None
 
 def cmd_list(args):
     """列出所有任务"""
@@ -78,13 +112,17 @@ def cmd_list(args):
     for r in rows:
         print(f"{r[0]:<14} {r[1]:<10} {r[2]:<12} {r[3] or '-':<16} {r[4] or '-'}")
 
-def cmd_status(args):
+def cmd_status(args, db=None):
     """查看任务详情"""
     if len(args) < 1:
         print("Usage: multiagent pm status <task_id>")
         return 1
     task_id = args[0]
-    db = StateDB(find_state_db()); db.connect()
+
+    _close_db = False
+    if db is None:
+        db = StateDB(find_state_db()); db.connect()
+        _close_db = True
 
     task = db.get_task(task_id)
     if not task:
@@ -121,7 +159,8 @@ def cmd_status(args):
         for m in metrics:
             print(f"    {m[0]}: {m[1]:,} in / {m[2]:,} out, ${m[3]:.4f}, {m[4]:,}ms")
 
-    db.close()
+    if _close_db:
+        db.close()
 
 def main():
     if len(sys.argv) < 2:
@@ -152,7 +191,11 @@ def main():
         args = sys.argv[2:]
 
     if cmd == "init": cmd_init(args)
-    elif cmd == "submit": cmd_submit(args)
+    elif cmd == "submit":
+        auto_run = "--run" in args
+        dry_run = "--dry-run" in args
+        clean_args = [a for a in args if a not in ("--run", "--dry-run")]
+        cmd_submit(clean_args, auto_run=auto_run, dry_run=dry_run)
     elif cmd == "list": cmd_list(args)
     elif cmd == "status": cmd_status(args)
     else: print(f"Unknown command: {cmd}")

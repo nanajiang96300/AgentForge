@@ -21,6 +21,7 @@ MODULES = [
     ("Adapters: CLI + Config", "test_adapters.py"),
     ("Orchestrator: Workflow Engine", "test_orchestrator.py"),
     ("Engine CLI: run command", "test_engine_cli.py"),
+    ("PM Engine: submit via Engine", "test_pm_engine.py"),
 ]
 
 def run_module(path, timeout=30):
