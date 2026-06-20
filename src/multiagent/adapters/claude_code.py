@@ -22,6 +22,8 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def build_command(self, agent_config, task_prompt, step):
         cmd = ["claude", "-p", task_prompt, "--output-format", "json"]
+        # Permission mode: auto-accept edits for non-interactive agent subprocess
+        cmd.extend(["--permission-mode", "acceptEdits"])
         skill_rel = agent_config.get("skill", "")
         if skill_rel:
             sp = self.project_root / skill_rel
