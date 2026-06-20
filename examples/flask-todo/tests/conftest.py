@@ -15,6 +15,7 @@ def app():
     app.config["TESTING"] = True
     app.config["SECRET_KEY"] = "test-key"
     app.config["DATABASE"] = db_path
+    app.config["WTF_CSRF_ENABLED"] = False  # Disable CSRF for API testing
     with app.app_context():
         from src.db import init_db
         init_db()
@@ -29,4 +30,5 @@ def client(app):
 @pytest.fixture
 def auth_user(client):
     client.post("/register", data={"email": "a@test.com", "password": "pass123"})
+    client.post("/login", data={"email": "a@test.com", "password": "pass123"})
     return {"email": "a@test.com", "password": "pass123"}

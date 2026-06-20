@@ -1,5 +1,5 @@
 """Todo CRUD routes"""
-from flask import Blueprint, render_template, request, redirect, url_for, session
+from flask import Blueprint, render_template, request, redirect, url_for, session, flash
 from ..forms import TodoForm
 from ..models import create_todo, get_todos, delete_todo
 
@@ -17,9 +17,8 @@ def login_required(f):
 @todos_bp.route("/")
 @login_required
 def list_todos():
-    # BUG B-005: get_todos() returns ALL users' todos
-    # Should filter by session["user_id"]
-    todos = get_todos()
+    # B-005 FIXED: Pass user_id to filter by owner
+    todos = get_todos(user_id=session["user_id"])
     form = TodoForm()
     return render_template("todos.html", todos=todos, form=form)
 
@@ -34,6 +33,7 @@ def add_todo():
 @todos_bp.route("/delete/<int:todo_id>", methods=["POST"])
 @login_required
 def delete_todo_route(todo_id):
-    # BUG B-001: No ownership check before delete
-    delete_todo(todo_id)
+    # B-001 FIXED: Check ownership before delete
+    if not delete_todo(todo_id, user_id=session["user_id"]):
+        flash("Not authorized to delete this todo")
     return redirect(url_for("todos.list_todos"))

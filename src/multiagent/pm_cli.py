@@ -126,11 +126,23 @@ def cmd_status(args):
 def main():
     if len(sys.argv) < 2:
         print("MultiAgent PM CLI v0.2.0")
-        print("Commands: init | submit | list | status")
+        print("Commands:")
+        print("  multiagent pm init                     Initialize .pm/ workspace")
+        print("  multiagent pm submit <requirements.md>  Submit requirements")
+        print("  multiagent pm list                      List all tasks")
+        print("  multiagent pm status <task_id>          Show task details")
         return
 
-    cmd = sys.argv[1]
-    args = sys.argv[2:]
+    # Support both: multiagent pm <cmd>  and  multiagent <cmd>
+    if sys.argv[1] == "pm":
+        if len(sys.argv) < 3:
+            print("Usage: multiagent pm <init|submit|list|status>")
+            return
+        cmd = sys.argv[2]
+        args = sys.argv[3:]
+    else:
+        cmd = sys.argv[1]
+        args = sys.argv[2:]
 
     if cmd == "init": cmd_init(args)
     elif cmd == "submit": cmd_submit(args)

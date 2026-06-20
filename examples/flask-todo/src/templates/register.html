@@ -1,4 +1,4 @@
 {% extends "base.html" %}{% block content %}
 <h2>Register</h2>
-<form method="POST">{{ form.email(placeholder="Email") }}{{ form.password(placeholder="Password") }}{{ form.submit() }}</form>
+<form method="POST">{{ form.hidden_tag() }}{{ form.email(placeholder="Email") }}{{ form.password(placeholder="Password") }}{{ form.submit() }}</form>
 {% endblock %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <h2>My Todos</h2>
 <p><a href="{{ url_for('auth.logout') }}">Logout</a></p>
-<form method="POST" action="{{ url_for('todos.add_todo') }}">{{ form.title(placeholder="New todo...") }}{{ form.submit() }}</form>
+<form method="POST" action="{{ url_for('todos.add_todo') }}">{{ form.hidden_tag() }}{{ form.title(placeholder="New todo...") }}{{ form.submit() }}</form>
 {% for todo in todos %}<div class="todo-item"><span>{{ '✅' if todo.completed else '⬜' }} {{ todo.title }}</span>
 <form method="POST" action="{{ url_for('todos.delete_todo_route', todo_id=todo.id) }}" style="display:inline"><button type="submit">Delete</button></form></div>
 {% endfor %}{% endblock %}
