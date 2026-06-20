@@ -15,12 +15,12 @@ agents:
       write:
         - ".agents/memory/conductor/"
         - ".framework/config/"
-        - ".framework/skills/"
+        - "architectures/dev-test-loop/skills/"
       read:
         - "*"
       deny: []
     personality: "clear, concise, orchestrator"
-    skill: ".framework/skills/conductor/SKILL.md"
+    skill: "architectures/dev-test-loop/skills/conductor/SKILL.md"
     memory: ".agents/memory/conductor/"
     session: "persistent"
     discord:
@@ -49,7 +49,7 @@ agents:
         - "scripts/"
         - "tests/"
     personality: "analytical, thorough, systematic"
-    skill: ".framework/skills/pm/SKILL.md"
+    skill: "architectures/dev-test-loop/skills/pm/SKILL.md"
     memory: ".agents/memory/pm/"
     session: "per-issue"
 
@@ -73,7 +73,7 @@ agents:
         - "tests/"
         - "docs/"
     personality: "methodical, careful, act-dont-ask"
-    skill: ".framework/skills/dev/SKILL.md"
+    skill: "architectures/dev-test-loop/skills/dev/SKILL.md"
     memory: ".agents/memory/dev/"
     session: "per-issue"
 
@@ -95,7 +95,7 @@ agents:
         - "src/"
         - "scripts/"
     personality: "evidence-obsessed, skeptical"
-    skill: ".framework/skills/test/SKILL.md"
+    skill: "architectures/dev-test-loop/skills/test/SKILL.md"
     memory: ".agents/memory/test/"
     session: "per-pr"
 
@@ -116,7 +116,7 @@ agents:
         - "docs/"
       deny: []
     personality: "efficient, autonomous, resilient"
-    skill: ".framework/skills/user-agent/SKILL.md"
+    skill: "architectures/dev-test-loop/skills/user-agent/SKILL.md"
     memory: ".agents/memory/user-agent/"
     session: "persistent"
 
