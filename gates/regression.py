@@ -23,6 +23,8 @@ MODULES = [
     ("Engine CLI: run command", "test_engine_cli.py"),
     ("PM Engine: submit via Engine", "test_pm_engine.py"),
     ("Parallel: fan-out execution", "test_parallel.py"),
+    ("Heartbeat: crash recovery", "test_heartbeat.py"),
+    ("Metrics CLI: token/cost", "test_metrics_cli.py"),
 ]
 
 def run_module(path, timeout=30):

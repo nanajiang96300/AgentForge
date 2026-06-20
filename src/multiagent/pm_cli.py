@@ -167,6 +167,7 @@ def main():
         print("MultiAgent CLI v0.3.0")
         print("Commands:")
         print("  multiagent run <workflow.yaml>           Run a workflow through Engine")
+        print("  multiagent metrics [--agent] [--json]     View token/cost metrics")
         print("  multiagent pm init                       Initialize .pm/ workspace")
         print("  multiagent pm submit <requirements.md>    Submit requirements")
         print("  multiagent pm list                        List all tasks")
@@ -177,6 +178,12 @@ def main():
     if sys.argv[1] == "run":
         from .engine_cli import main as engine_main
         engine_main()
+        return
+
+    # Dispatch: multiagent metrics → metrics_cli
+    if sys.argv[1] == "metrics":
+        from .metrics_cli import main as metrics_main
+        metrics_main()
         return
 
     # Support both: multiagent pm <cmd>  and  multiagent <cmd>
