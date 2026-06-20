@@ -1,0 +1,65 @@
+# ============================================================
+# Discord Bot 注册与频道映射
+# 对应任务书 Section 6 Discord 控制台拓扑
+# ============================================================
+
+# 设计原则：Discord 是控制面，仅 Conductor 有 Bot 呈现
+# 下层 Agent（PM/Dev/Test/User Agent）全部纯后台运行
+
+server:
+  name: "MultiAgent 开发控制台"
+
+bots:
+
+  - name: "MultiAgent_Conductor"
+    role: conductor
+    display: "@MultiAgent_Conductor"
+    avatar: "🎯"
+    status: "在线"
+    description: "Human 唯一入口，总控 Agent。翻译指令、分发任务、汇总状态、汇报结果"
+
+    channels:
+      - name: "指挥中心"
+        type: text
+        topic: "Human ↔ Conductor 唯一交互频道"
+        permissions:
+          human: ["read", "write", "attach_files"]
+          conductor: ["read", "write", "attach_files"]
+          others: []  # 下层 Agent 无权限
+
+      - name: "系统告警"
+        type: text
+        topic: "紧急升级通知（自动推送，非聊天频道）"
+        permissions:
+          human: ["read"]
+          conductor: ["read", "write"]
+          others: []
+
+  # 下层 Agent 均无 Discord Bot
+  # PM Agent   → 无 Bot（通过 Git Issue/Webhook 通信）
+  # Dev Agent  → 无 Bot（通过 Git PR 通信）
+  # Test Agent → 无 Bot（通过 Git PR Review 通信）
+  # User Agent → 无 Bot（通过文件系统 + Git Issue 通信）
+
+# ═══ 通知规则 ═══
+notifications:
+  - event: "issue_created"
+    channel: "指挥中心"
+    template: "📋 Issue #{number}: {title} 已创建"
+
+  - event: "pr_ready_for_review"
+    channel: "指挥中心"
+    template: "✅ PR #{number}: {title} 全绿，请 Human 审查"
+
+  - event: "escalation"
+    channel: "系统告警"
+    template: "🚨 Issue #{number} 被 Test 打回 3 次，已升级，请 Human 介入仲裁"
+    mention: "@Human"
+
+  - event: "engine_crash"
+    channel: "系统告警"
+    template: "💥 Workflow Engine 崩溃: {error}，正在尝试恢复"
+
+  - event: "merge_completed"
+    channel: "指挥中心"
+    template: "🔀 PR #{number} 已合并到 main，业务恢复中"

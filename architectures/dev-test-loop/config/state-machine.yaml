@@ -1,0 +1,120 @@
+# ============================================================
+# Issue/PR 状态机流转规则
+# 对应任务书 Section 7.2 Issue 状态机
+# ============================================================
+
+states:
+  - open
+  - analyzing
+  - assigned
+  - in_progress
+  - in_review
+  - rejected
+  - ready_for_review
+  - escalated
+  - merged
+  - closed
+
+transitions:
+
+  # ═══ Issue 生命周期 ═══
+  - from: open
+    to: analyzing
+    trigger: "PM 认领 Issue"
+    actor: pm
+    auto: false
+
+  - from: analyzing
+    to: assigned
+    trigger: "PM 分析完毕，@Dev 指派"
+    actor: pm
+    auto: false
+    required_fields:
+      - root_cause
+      - target_module
+      - complexity
+      - assigned_dev
+
+  - from: assigned
+    to: in_progress
+    trigger: "Dev 开始开发"
+    actor: dev
+    auto: false
+
+  - from: in_progress
+    to: in_review
+    trigger: "Dev 提交 PR"
+    actor: dev
+    auto: true
+
+  # ═══ PR 审查 ═══
+  - from: in_review
+    to: rejected
+    trigger: "Test CI 不通过"
+    actor: test
+    auto: false
+    required_fields:
+      - rejection_info.test_id
+      - rejection_info.input_params
+      - rejection_info.expected
+      - rejection_info.actual
+      - rejection_info.failure_location
+      - rejection_info.stack_trace
+
+  - from: in_review
+    to: ready_for_review
+    trigger: "Test CI 全绿，Approve"
+    actor: test
+    auto: false
+
+  - from: rejected
+    to: in_progress
+    trigger: "Dev 修复后重新 Push"
+    actor: dev
+    auto: false
+    guard: "rejection_count < 3"
+
+  - from: rejected
+    to: escalated
+    trigger: "同一 Issue 被 Reject >= 3 次"
+    actor: system
+    auto: true
+    condition: "rejection_count >= 3"
+
+  # ═══ Human 审查与闭环 ═══
+  - from: ready_for_review
+    to: merged
+    trigger: "Human 审查并 Merge"
+    actor: human
+    auto: false
+
+  - from: ready_for_review
+    to: in_progress
+    trigger: "Human Request Changes"
+    actor: human
+    auto: false
+
+  - from: merged
+    to: closed
+    trigger: "PM 更新 Changelog"
+    actor: pm
+    auto: false
+
+  # ═══ 特殊路径 ═══
+  - from: escalated
+    to: closed
+    trigger: "Human 仲裁后关闭"
+    actor: human
+    auto: false
+
+  - from: escalated
+    to: assigned
+    trigger: "Human 重新指派"
+    actor: human
+    auto: false
+
+  - from: open
+    to: closed
+    trigger: "创建者关闭 Issue"
+    actor: any
+    auto: false

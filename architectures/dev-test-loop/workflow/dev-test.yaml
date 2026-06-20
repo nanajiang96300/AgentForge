@@ -1,0 +1,96 @@
+# Dev-Test 最小工作流定义
+# Phase 1: Workflow Engine 驱动 Dev→Test 最小闭环
+
+workflow:
+  id: "dev-test-loop"
+  description: "Dev Agent 修复 Bug → Test Agent 验证 → 闭环"
+  version: "1.0"
+
+  trigger:
+    type: "git.issue"
+    filter:
+      labels: ["bug"]
+      status: "assigned"
+
+  steps:
+    # ═══ Step 1: Dev 修复 ═══
+    - id: "dev_fix"
+      agent: "dev"
+      description: "在隔离分支修复 Bug，提交 PR"
+      timeout: 600
+      retry:
+        max: 3
+        backoff: "exponential"
+      input:
+        from: "task.context"
+        fields:
+          - "root_cause"
+          - "target_module"
+          - "complexity"
+      output:
+        required:
+          - "branch_name"
+          - "pr_number"
+          - "files_changed"
+      guard:
+        forbidden_paths:
+          - "tests/"
+          - "docs/"
+      on_success:
+        action: "git.pr.create"
+      on_failure:
+        retry: true
+        escalate_on_exhaust: true
+
+    # ═══ Step 2: Test 验证 ═══
+    - id: "test_verify"
+      agent: "test"
+      description: "拉取 PR 分支，运行测试套件，输出判决"
+      depends_on: "dev_fix"
+      timeout: 300
+      input:
+        from: "dev_fix.output"
+        fields:
+          - "branch_name"
+          - "pr_number"
+      output:
+        required:
+          - "verdict"
+          - "test_summary"
+      on_verdict_approved:
+        next: "notify_conductor"
+      on_verdict_rejected:
+        next: "dev_fix"
+        increment_global_retry: true
+        require_rejection_yaml: true
+
+    # ═══ Step 3: 通知 Conductor ═══
+    - id: "notify_conductor"
+      agent: "conductor"
+      description: "通知 Human PR 已全绿，待审查"
+      depends_on: "test_verify"
+      condition: "test_verify.output.verdict == 'approved'"
+      timeout: 30
+      on_success:
+        action: "discord.notify"
+        channel: "指挥中心"
+        template: "pr_ready_for_review"
+
+  # ═══ 错误策略 ═══
+  error_policy:
+    max_global_retries: 3       # 全局最大重试次数（Reject 循环上限）
+    escalation_target: "stdout"  # Phase 1 输出到 stdout，Phase 4 改为 Discord
+    on_escalation:
+      action: "log_and_stop"
+      notify: ["conductor"]
+
+  # ═══ Saga 补偿事务 ═══
+  compensations:
+    dev_fix_failed:
+      - action: "git.branch.delete"
+        params:
+          branch: "{dev_fix.output.branch_name}"
+    pr_create_failed:
+      - action: "git.branch.delete"
+        params:
+          branch: "{dev_fix.output.branch_name}"

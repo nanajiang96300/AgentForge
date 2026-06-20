@@ -1,0 +1,49 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# State databases (runtime data, not source)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Test results (generated, not source)
+gates/results/
+runs/
+
+# Agent runtime data (generated per-run)
+.agents/worktrees/
+.agents/memory/*/
+!**/.gitkeep
+examples/*/.agents/worktrees/
+examples/*/.agents/memory/*/
+
+# Logs & output
+logs/
+results/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+/tmp/
+*.tmp
+
+# Environment
+.env
+.env.local
