@@ -48,3 +48,5 @@ Thumbs.db
 .env
 .env.local
 .pm/
+examples/devlog/
+!examples/devlog/requirements.md
