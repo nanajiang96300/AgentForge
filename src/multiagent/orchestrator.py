@@ -227,8 +227,8 @@ class WorkflowOrchestrator:
         max_rejections = self.workflow_def.get("workflow", {}).get("error_policy", {}).get("max_rejections", 3)
 
         if rejection_count < max_rejections:
-            # 回到上一步（dev_fix）
-            step.state = StepState.REJECTED
+            # 回到上一步（dev_fix），同时重置当前步骤等待重新验证
+            step.state = StepState.PENDING
             dev_step_id = step.on_verdict_rejected.get("next", "")
             if dev_step_id and dev_step_id in self.steps:
                 dev_step = self.steps[dev_step_id]
