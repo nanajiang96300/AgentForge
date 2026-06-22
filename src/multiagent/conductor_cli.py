@@ -238,8 +238,15 @@ def cmd_status(args):
             cost = task.get("cost_usd", 0)
             tokens_in = task.get("input_tokens", 0) or 0
             tokens_out = task.get("output_tokens", 0) or 0
+
+            # Progress bar
+            bar = task.get("bar", "")
+            subtasks_info = ""
+            if task.get("total_subtasks", 0) > 0:
+                subtasks_info = f" | Subtasks: {task.get('completed_subtasks',0)}/{task.get('total_subtasks',0)}"
+
             print(f"    • {task['task_id']}")
-            print(f"      Step: {step} ({agent}) | Status: {task.get('status','?')}{elapsed}")
+            print(f"      {bar} {step} ({agent}) | {task.get('status','?')}{elapsed}{subtasks_info}")
             print(f"      Tokens: {tokens_in:,} in / {tokens_out:,} out | Cost: \${cost:.4f}")
 
     # List pending/escalated tasks from DB
