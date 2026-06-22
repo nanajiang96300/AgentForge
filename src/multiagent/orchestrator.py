@@ -195,8 +195,9 @@ class WorkflowOrchestrator:
                     self.db.update_task_status(task.id, "escalated", step.id)
                     return result
 
-            # Rejection loop 检查
-            if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
+            # Rejection loop 检查 (case-insensitive)
+            verdict = str(result.output.get("verdict", "")).lower()
+            if step.on_verdict_rejected and verdict == "rejected":
                 return self._handle_rejection(task, step, result)
 
             step.state = StepState.COMPLETED
@@ -324,7 +325,7 @@ class WorkflowOrchestrator:
             if len(ready) > 1 and self._can_parallelize(ready):
                 parallel_results = self._execute_parallel(task, ready)
                 for step, result in parallel_results:
-                    if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
+                    if step.on_verdict_rejected and str(result.output.get("verdict", "")).lower() == "rejected":
                         # Rejection breaks the current parallel batch
                         break
             else:
@@ -333,7 +334,7 @@ class WorkflowOrchestrator:
                     result = self.execute_step(task, step)
 
                     # 如果是 rejection → 跳出当前循环，允许 dev_fix 重新执行
-                    if step.on_verdict_rejected and result.output.get("verdict") == "rejected":
+                    if step.on_verdict_rejected and str(result.output.get("verdict", "")).lower() == "rejected":
                         break
 
         return {
