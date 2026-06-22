@@ -159,13 +159,14 @@ class WorkflowOrchestrator:
 
     def execute_step(self, task: Task, step: WorkflowStep) -> StepResult:
         """执行单个步骤"""
-        # 构建步骤定义
+        # 构建步骤定义（传递 output.required 以生成精确 prompt）
         step_def = {
             "id": step.id,
             "agent": step.agent,
             "description": step.description,
             "timeout": step.timeout,
             "input": self.build_step_input(step, task),
+            "output": step.output,  # Pass required fields to prompt builder
         }
 
         # Spawn

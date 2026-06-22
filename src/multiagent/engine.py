@@ -50,7 +50,13 @@ class AgentSpawner:
         parts.append(f"\nTask: {task.id} ({task.type})")
         inp = step.get("input",{})
         if inp: parts.append(f"\nContext: {json.dumps(inp, ensure_ascii=False)}")
-        parts.append("\n\nReturn a JSON summary with required output fields.")
+        # Tell the agent exactly what JSON fields are required
+        required = step.get("output", {}).get("required", [])
+        if required:
+            parts.append(f"\nYou MUST return a JSON block with these exact fields: {json.dumps(required)}")
+            parts.append("Example: ```json\n{\"" + '": "...",\n  "'.join(required) + '": "..."}\n```')
+        else:
+            parts.append("\n\nReturn a JSON summary with required output fields.")
         return "\n".join(parts)
 
     def monitor(self, task, step, process, timeout=600, adapter=None):

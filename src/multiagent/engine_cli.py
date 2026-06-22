@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .db import StateDB, Task, now_iso
 from .engine import AgentSpawner, load_yaml
+from .orchestrator import WorkflowOrchestrator
 
 
 _SKIP_DIRS = {'.venv', '.git', '__pycache__', 'node_modules', '.claude'}
@@ -185,7 +186,6 @@ def cmd_run(db=None, workflow_path=None, task_id=None, dry_run=False, roles_path
         if dry_run:
             print("\n[Dry-run mode — validating workflow only]")
             # Load workflow, resolve dependencies, print summary
-            from .orchestrator import WorkflowOrchestrator
 
             # Load roles for spawner (may be dummy for dry-run)
             roles = {"agents": {}, "global": {"runtime": "claude-code"}}
@@ -241,7 +241,12 @@ def cmd_run(db=None, workflow_path=None, task_id=None, dry_run=False, roles_path
         task.status = "running"
 
         # Run the workflow
-        result = orchestrator.run(task)
+        try:
+            result = orchestrator.run(task)
+        except Exception as e:
+            print(f"\n❌ Workflow Error: {e}")
+            db.update_task_status(task_id, "failed")
+            return None
 
         # Print results
         print(f"\n{'='*50}")
