@@ -28,6 +28,135 @@ _DEFAULT_POLL_INTERVAL = 5
 _log = logging.getLogger("multiagent.conductor")
 
 
+# ── Progress Tracking ──
+
+def _progress_bar(pct: float, width: int = 16) -> str:
+    """ASCII 进度条：████░░░░ 67%"""
+    filled = int(width * pct / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {pct:.0f}%"
+
+
+def _calculate_task_progress(db, task_id: str) -> dict:
+    """从 PM task_breakdown 和 Dev 完成情况计算细粒度进度。
+
+    返回 {pct, total_subtasks, completed_subtasks, stage, bar}
+    stage: 'pm' | 'dev' | 'test' | 'done'
+    """
+    result = {"pct": 0, "total_subtasks": 0, "completed_subtasks": 0,
+              "stage": "pending", "bar": _progress_bar(0)}
+
+    # Get current step
+    steps = db.conn.execute(
+        "SELECT step_id, agent, status, output FROM step_results "
+        "WHERE task_id = ? ORDER BY id",
+        (task_id,)
+    ).fetchall()
+
+    step_status = {}
+    for s in steps:
+        step_status[s[0]] = s[2]
+
+    # Stage determination
+    if step_status.get("pm_analyze") != "completed":
+        result["stage"] = "pm"
+        result["pct"] = 10
+        result["bar"] = _progress_bar(10)
+        return result
+
+    # PM done — parse task_breakdown
+    import json as _json
+    pm_output = None
+    for s in steps:
+        if s[0] == "pm_analyze" and s[2] == "completed" and s[3]:
+            try:
+                pm_output = _json.loads(s[3])
+            except Exception:
+                pass
+            break
+
+    total_subtasks = 0
+    if pm_output:
+        # Try to extract task_breakdown
+        from .adapters.claude_code import _extract_json_block
+        resp = pm_output.get("response", "")
+        jb = _extract_json_block(resp)
+        if jb:
+            tb = jb.get("task_breakdown", [])
+            if isinstance(tb, list):
+                total_subtasks = len(tb)
+                result["total_subtasks"] = total_subtasks
+
+    # If no task_breakdown found, estimate from estimated_files
+    if total_subtasks == 0 and pm_output:
+        from .adapters.claude_code import _extract_json_block
+        resp = pm_output.get("response", "")
+        jb = _extract_json_block(resp)
+        if jb:
+            ef = jb.get("estimated_files", [])
+            if isinstance(ef, list):
+                total_subtasks = len(ef)
+                result["total_subtasks"] = total_subtasks
+
+    if total_subtasks == 0:
+        total_subtasks = 1  # fallback
+
+    # Calculate completion from Dev output
+    completed = 0
+    for s in steps:
+        if s[0] == "dev_fix" and s[2] == "completed" and s[3]:
+            try:
+                dev_out = _json.loads(s[3])
+                from .adapters.claude_code import _extract_json_block
+                resp = dev_out.get("response", "")
+                jb = _extract_json_block(resp)
+                if jb:
+                    sc = jb.get("subtasks_completed", jb.get("tasks_completed", []))
+                    if isinstance(sc, list):
+                        completed = len([x for x in sc if isinstance(x, dict)
+                                         and x.get("status") in ("done", "completed")])
+                        if completed == 0:
+                            completed = len(sc)  # Count all if no status field
+                    # Also check files_changed vs estimated_files
+                    fc = jb.get("files_changed", "")
+                    if isinstance(fc, list):
+                        ef = None
+                        if pm_output:
+                            resp2 = pm_output.get("response", "")
+                            jb2 = _extract_json_block(resp2)
+                            if jb2:
+                                ef = jb2.get("estimated_files", [])
+                        if ef and isinstance(ef, list):
+                            completed = max(completed,
+                                          len(set(fc) & set(ef)))
+            except Exception:
+                pass
+            break
+
+    result["completed_subtasks"] = min(completed, total_subtasks)
+
+    # Determine stage
+    if step_status.get("test_verify") == "completed":
+        result["stage"] = "done"
+        result["pct"] = 100
+    elif step_status.get("test_verify") == "running":
+        result["stage"] = "test"
+        result["pct"] = 80 + min(20, completed * 20 // max(total_subtasks, 1))
+    elif step_status.get("dev_fix") == "completed":
+        result["stage"] = "dev_done"
+        result["pct"] = 60 + min(20, completed * 20 // max(total_subtasks, 1))
+    elif step_status.get("dev_fix") == "running":
+        result["stage"] = "dev"
+        result["pct"] = 30 + min(30, completed * 30 // max(total_subtasks, 1))
+    elif step_status.get("pm_analyze") == "completed":
+        result["stage"] = "pm_done"
+        result["pct"] = 25
+
+    result["pct"] = min(99, result["pct"])  # Cap at 99 until fully done
+    result["bar"] = _progress_bar(result["pct"])
+    return result
+
+
 def _get_default_logger(level=logging.INFO):
     """获取默认 logger（无 handler 时创建）"""
     if not _log.handlers:
@@ -202,6 +331,13 @@ class Conductor:
                                     progress["latest_step"] = row[0]
                                     progress["latest_agent"] = row[1]
                                     progress["latest_status"] = row[2]
+                                # Fine-grained progress from PM task_breakdown
+                                try:
+                                    p = _calculate_task_progress(db_proj, task_id)
+                                    progress.update(p)
+                                except Exception:
+                                    progress["pct"] = 0
+                                    progress["bar"] = _progress_bar(0)
                                 # Get token usage
                                 metrics = db_proj.conn.execute(
                                     "SELECT SUM(input_tokens), SUM(output_tokens), SUM(cost_usd), "
