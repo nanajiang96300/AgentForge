@@ -25,6 +25,7 @@ MODULES = [
     ("Parallel: fan-out execution", "test_parallel.py"),
     ("Heartbeat: crash recovery", "test_heartbeat.py"),
     ("Metrics CLI: token/cost", "test_metrics_cli.py"),
+    ("Conductor: auto-trigger + full auto", "test_conductor.py"),
 ]
 
 def run_module(path, timeout=30):

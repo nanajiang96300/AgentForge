@@ -58,6 +58,11 @@ class StateDB:
                 output_tokens INTEGER DEFAULT 0, cache_read_tokens INTEGER DEFAULT 0,
                 cost_usd REAL DEFAULT 0.0, num_turns INTEGER DEFAULT 1, ttft_ms INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'unknown', recorded_at TEXT, FOREIGN KEY (task_id) REFERENCES tasks(id));
+            CREATE TABLE IF NOT EXISTS escalations (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL, step_id TEXT NOT NULL, reason TEXT NOT NULL,
+                context TEXT DEFAULT '{}', status TEXT DEFAULT 'pending',
+                created_at TEXT, resolved_at TEXT, resolution TEXT,
+                FOREIGN KEY (task_id) REFERENCES tasks(id));
         """)
         self.conn.commit()
         # Phase 2 migration: add rejection_count to existing DBs
@@ -161,6 +166,55 @@ class StateDB:
                  metrics.duration_ms, metrics.duration_api_ms, metrics.input_tokens, metrics.output_tokens,
                  metrics.cache_read_tokens, metrics.cost_usd, metrics.num_turns, metrics.ttft_ms,
                  metrics.status, now_iso())); self.conn.commit()
+
+    # ── Escalations (Phase 4: Conductor human notification) ──
+
+    def record_escalation(self, task_id: str, step_id: str, reason: str, context: Optional[dict] = None) -> int:
+        """记录升级事件，返回 escalation ID"""
+        with self._write_lock:
+            cur = self.conn.execute(
+                """INSERT INTO escalations (task_id, step_id, reason, context, status, created_at)
+                   VALUES (?, ?, ?, ?, 'pending', ?)""",
+                (task_id, step_id, reason, json.dumps(context or {}), now_iso()))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def get_pending_escalations(self) -> list[dict]:
+        """获取所有未处理的升级事件"""
+        rows = self.conn.execute(
+            """SELECT id, task_id, step_id, reason, context, status, created_at
+               FROM escalations WHERE status = 'pending' ORDER BY created_at""").fetchall()
+        return [dict(zip(["id", "task_id", "step_id", "reason", "context", "status", "created_at"], r))
+                for r in rows]
+
+    def resolve_escalation(self, escalation_id: int, resolution: str) -> bool:
+        """处理升级事件（accept/retry/reject）"""
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE escalations SET status = 'resolved', resolution = ?, resolved_at = ?
+                   WHERE id = ?""", (resolution, now_iso(), escalation_id))
+            self.conn.commit()
+            return True
+
+    def get_pending_tasks(self) -> list[dict]:
+        """获取所有状态为 pending 的任务（Conductor 用）"""
+        rows = self.conn.execute(
+            """SELECT id, type, source, workflow_id, current_step, status, retry_count,
+               rejection_count, dedup_key, context, created_at, claimed_at, completed_at
+               FROM tasks WHERE status = 'pending' ORDER BY created_at""").fetchall()
+        cols = ["id", "type", "source", "workflow_id", "current_step", "status", "retry_count",
+                "rejection_count", "dedup_key", "context", "created_at", "claimed_at", "completed_at"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def get_escalated_tasks(self) -> list[dict]:
+        """获取所有状态为 escalated 的任务"""
+        rows = self.conn.execute(
+            """SELECT id, type, source, workflow_id, current_step, status, retry_count,
+               rejection_count, dedup_key, context, created_at, claimed_at, completed_at
+               FROM tasks WHERE status = 'escalated' ORDER BY created_at""").fetchall()
+        cols = ["id", "type", "source", "workflow_id", "current_step", "status", "retry_count",
+                "rejection_count", "dedup_key", "context", "created_at", "claimed_at", "completed_at"]
+        return [dict(zip(cols, r)) for r in rows]
 
     def get_metrics_summary(self, agent: Optional[str] = None) -> dict:
         if agent:

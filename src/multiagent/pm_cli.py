@@ -172,6 +172,7 @@ def main():
         print("Commands:")
         print("  multiagent run <workflow.yaml>           Run a workflow through Engine")
         print("  multiagent metrics [--agent] [--json]     View token/cost metrics")
+        print("  multiagent conductor start|status|stop    Conductor monitoring loop")
         print("  multiagent pm init                       Initialize .pm/ workspace")
         print("  multiagent pm submit <requirements.md>    Submit requirements")
         print("  multiagent pm list                        List all tasks")
@@ -188,6 +189,12 @@ def main():
     if sys.argv[1] == "metrics":
         from .metrics_cli import main as metrics_main
         metrics_main()
+        return
+
+    # Dispatch: multiagent conductor → conductor_cli
+    if sys.argv[1] == "conductor":
+        from .conductor_cli import main as conductor_main
+        conductor_main()
         return
 
     # Support both: multiagent pm <cmd>  and  multiagent <cmd>
