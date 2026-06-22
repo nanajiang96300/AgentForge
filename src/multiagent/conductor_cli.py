@@ -135,6 +135,7 @@ def cmd_start(args):
         logger=logger,
         notifiers=notifiers,
         pid_file=pid_file,
+        max_workers=args.workers,
     )
     _conductor = c
 
@@ -203,6 +204,8 @@ def cmd_status(args):
     if cd["last_poll_at"]:
         print(f"  Last Poll:    {cd['last_poll_at']}")
     print(f"  Poll:         {cd['poll_interval_s']}s")
+    print(f"  Max Workers:  {cd.get('max_workers', '?')}")
+    print(f"  In Flight:    {cd.get('in_flight_count', 0)}")
     print(f"  Processed:    {cd['tasks_processed']}")
     print(f"  Failed:       {cd['tasks_failed']}")
     print(f"  Escalations:  {cd['escalations_detected']}")
@@ -216,6 +219,28 @@ def cmd_status(args):
         print(f"  Running:   {proj['running']}")
         print(f"  Escalated: {proj['escalated']}")
         print(f"  Alerts:    {proj['alerts']}")
+
+    # Show in-flight task progress
+    in_flight = status.get("in_flight", [])
+    if in_flight:
+        print(f"\n  ── In-Flight Tasks ({len(in_flight)}) ──")
+        for task in in_flight:
+            elapsed = ""
+            if task.get("started_at"):
+                try:
+                    from datetime import datetime, timezone
+                    start = datetime.fromisoformat(task["started_at"])
+                    secs = (datetime.now(timezone.utc) - start).total_seconds()
+                    elapsed = f" {int(secs)}s"
+                except: pass
+            step = task.get("latest_step", task.get("current_step", "?"))
+            agent = task.get("latest_agent", "")
+            cost = task.get("cost_usd", 0)
+            tokens_in = task.get("input_tokens", 0) or 0
+            tokens_out = task.get("output_tokens", 0) or 0
+            print(f"    • {task['task_id']}")
+            print(f"      Step: {step} ({agent}) | Status: {task.get('status','?')}{elapsed}")
+            print(f"      Tokens: {tokens_in:,} in / {tokens_out:,} out | Cost: \${cost:.4f}")
 
     # List pending/escalated tasks from DB
     db = StateDB(db_path)
@@ -406,6 +431,8 @@ def _build_parser():
                          help="Poll interval in seconds (default: 5)")
     p_start.add_argument("--pid-file", default=None,
                          help="PID file path")
+    p_start.add_argument("--workers", "-w", type=int, default=3,
+                         help="Max concurrent tasks (default: 3)")
     p_start.add_argument("--discord-webhook", default=None,
                          help="Discord webhook URL for notifications")
 
@@ -421,6 +448,7 @@ def _build_parser():
     p_restart.add_argument("--foreground", "-f", action="store_true")
     p_restart.add_argument("--interval", "-i", type=int, default=5)
     p_restart.add_argument("--pid-file", default=None)
+    p_restart.add_argument("--workers", "-w", type=int, default=3)
     p_restart.add_argument("--discord-webhook", default=None)
 
     # alerts

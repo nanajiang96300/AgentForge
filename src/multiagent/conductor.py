@@ -15,6 +15,7 @@ import os
 import signal
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,16 @@ def _get_default_logger(level=logging.INFO):
 
 
 @dataclass
+class InFlightTask:
+    """正在执行的任务进度"""
+    task_id: str
+    project_name: str
+    started_at: str
+    thread_id: int
+    future: object = None  # concurrent.futures.Future
+
+
+@dataclass
 class ConductorState:
     """Conductor 运行时状态"""
     running: bool = False
@@ -51,6 +62,7 @@ class ConductorState:
     started_at: Optional[str] = None
     last_poll_at: Optional[str] = None
     pid_file: Optional[Path] = None
+    max_workers: int = 3  # Max concurrent tasks
 
 
 @dataclass
@@ -75,6 +87,7 @@ class Conductor:
         logger: Optional[logging.Logger] = None,
         notifiers: Optional[list[Callable]] = None,
         pid_file: Optional[Path] = None,
+        max_workers: int = 3,
     ):
         # Single-project mode (backward compat)
         self._single_db = db_path
@@ -95,9 +108,10 @@ class Conductor:
             ]
 
         self.poll_interval = poll_interval
-        self.state = ConductorState(pid_file=pid_file)
+        self.state = ConductorState(pid_file=pid_file, max_workers=max_workers)
         self._lock = threading.Lock()
-        self._tasks_in_flight: dict[str, threading.Thread] = {}
+        self._in_flight: dict[str, InFlightTask] = {}
+        self._executor: Optional[ThreadPoolExecutor] = None
         self.log = logger or _get_default_logger()
         self.notifiers = notifiers or []
 
@@ -151,11 +165,60 @@ class Conductor:
             self.state.pid_file and self.state.pid_file.exists()
         )
 
-        # Aggregate queue counts for backward compat
+        # Aggregate queue counts
         total_pending = sum(p["pending"] for p in projects_status)
         total_running = sum(p["running"] for p in projects_status)
         total_escalated = sum(p["escalated"] for p in projects_status)
         total_alerts = sum(p["alerts"] for p in projects_status)
+
+        # In-flight task progress
+        in_flight_progress = []
+        with self._lock:
+            for task_id, inf in list(self._in_flight.items()):
+                progress = {
+                    "task_id": task_id,
+                    "project": inf.project_name,
+                    "started_at": inf.started_at,
+                }
+                # Get current step from DB
+                try:
+                    for project in self.projects:
+                        if project.name == inf.project_name:
+                            db_proj = self._connect_db(project.db_path)
+                            try:
+                                t = db_proj.get_task(task_id)
+                                if t:
+                                    progress["status"] = t.get("status", "?")
+                                    progress["current_step"] = t.get("current_step", "?")
+                                    progress["retry_count"] = t.get("retry_count", 0)
+                                    progress["rejection_count"] = t.get("rejection_count", 0)
+                                # Get latest step result
+                                row = db_proj.conn.execute(
+                                    "SELECT step_id, agent, status FROM step_results "
+                                    "WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                                    (task_id,)
+                                ).fetchone()
+                                if row:
+                                    progress["latest_step"] = row[0]
+                                    progress["latest_agent"] = row[1]
+                                    progress["latest_status"] = row[2]
+                                # Get token usage
+                                metrics = db_proj.conn.execute(
+                                    "SELECT SUM(input_tokens), SUM(output_tokens), SUM(cost_usd), "
+                                    "SUM(duration_ms) FROM agent_metrics WHERE task_id = ?",
+                                    (task_id,)
+                                ).fetchone()
+                                if metrics and metrics[0]:
+                                    progress["input_tokens"] = metrics[0]
+                                    progress["output_tokens"] = metrics[1]
+                                    progress["cost_usd"] = round(metrics[2] or 0, 6)
+                                    progress["duration_ms"] = metrics[3]
+                            finally:
+                                db_proj.close()
+                            break
+                except Exception:
+                    pass
+                in_flight_progress.append(progress)
 
         return {
             "conductor": {
@@ -171,8 +234,9 @@ class Conductor:
                 "escalations_detected": self.state.escalations_detected,
                 "current_task_id": self.state.current_task_id,
                 "projects": len(self.projects),
+                "max_workers": self.state.max_workers,
+                "in_flight_count": len(self._in_flight),
             },
-            # Backward compat
             "queue": {
                 "pending": total_pending,
                 "running": total_running,
@@ -181,29 +245,83 @@ class Conductor:
             "alerts": {
                 "pending_escalations": total_alerts,
             },
+            "in_flight": in_flight_progress,
             "projects": projects_status,
         }
 
     def process_one(self, project: Optional[ProjectConfig] = None) -> Optional[str]:
-        """处理一个 pending 任务。返回 task_id 或 None。"""
+        """处理一个 pending 任务（同步，向后兼容）。返回 task_id 或 None。"""
         if project is None:
             if not self.projects:
                 return None
             project = self.projects[0]
+        return self._execute_task(project, project.db_path)
 
-        db = self._connect_db(project.db_path)
+    def process_all(self) -> list[str]:
+        """并行处理所有项目的所有 pending 任务。返回已启动的 task_id 列表。"""
+        started = []
+
+        # Collect all pending tasks across all projects
+        all_tasks: list[tuple[ProjectConfig, dict]] = []
+        for project in self.projects:
+            db = self._connect_db(project.db_path)
+            try:
+                for task_dict in db.get_pending_tasks():
+                    all_tasks.append((project, task_dict))
+            finally:
+                db.close()
+
+        if not all_tasks:
+            return started
+
+        # Ensure executor is ready
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(
+                max_workers=self.state.max_workers,
+                thread_name_prefix="agentforge",
+            )
+
+        # Submit all pending tasks
+        for project, task_dict in all_tasks:
+            task_id = task_dict["id"]
+            if task_id in self._in_flight:
+                continue  # Already running
+
+            future = self._executor.submit(
+                self._execute_task, project, project.db_path, task_dict
+            )
+            in_flight = InFlightTask(
+                task_id=task_id,
+                project_name=project.name,
+                started_at=now_iso(),
+                thread_id=id(future),
+                future=future,
+            )
+            with self._lock:
+                self._in_flight[task_id] = in_flight
+            started.append(task_id)
+            self.log.info("Dispatched: %s (project=%s, in_flight=%d)",
+                          task_id, project.name, len(self._in_flight))
+
+        return started
+
+    def _execute_task(self, project: ProjectConfig, db_path: Path,
+                      task_dict: Optional[dict] = None) -> Optional[str]:
+        """在线程中执行单个任务。task_dict=None 时自动取第一个 pending。"""
+        db = self._connect_db(db_path)
         try:
-            pending = db.get_pending_tasks()
-            if not pending:
-                return None
+            if task_dict is None:
+                pending = db.get_pending_tasks()
+                if not pending:
+                    return None
+                task_dict = pending[0]
 
-            task_dict = pending[0]
             task_id = task_dict["id"]
 
             with self._lock:
                 self.state.current_task_id = task_id
 
-            self.log.info("Processing task: %s (project=%s)", task_id, project.name)
+            self.log.info("Executing: %s (project=%s)", task_id, project.name)
             self._notify("started", task_id, project.name, task_dict)
 
             try:
@@ -221,7 +339,6 @@ class Conductor:
                     if result_id is None:
                         self.state.tasks_failed += 1
 
-                # Post-execution checks
                 task_after = db.get_task(task_id)
                 if task_after:
                     status = task_after.get("status")
@@ -242,8 +359,7 @@ class Conductor:
                     self.state.tasks_failed += 1
                 self.log.error("Workflow error for %s: %s", task_id, e)
                 db.record_escalation(
-                    task_id=task_id,
-                    step_id="conductor",
+                    task_id=task_id, step_id="conductor",
                     reason=f"Workflow execution error: {e}",
                 )
                 self._notify("escalated", task_id, project.name,
@@ -254,6 +370,8 @@ class Conductor:
             finally:
                 with self._lock:
                     self.state.current_task_id = None
+                    if task_id in self._in_flight:
+                        del self._in_flight[task_id]
         finally:
             db.close()
 
@@ -294,8 +412,7 @@ class Conductor:
         return db
 
     def _monitor_loop(self):
-        """主监控循环"""
-        # Signal handlers for graceful shutdown
+        """主监控循环 — 每轮并行处理所有 pending 任务"""
         try:
             signal.signal(signal.SIGINT, self._handle_signal)
             signal.signal(signal.SIGTERM, self._handle_signal)
@@ -312,12 +429,24 @@ class Conductor:
                         break
                     self._check_escalations(project)
                     self._check_stop_signal(project)
-                    self.process_one(project)
+
+                # Dispatch ALL pending tasks in parallel
+                if self.state.running:
+                    started = self.process_all()
+                    if started:
+                        self.log.info("Dispatched %d tasks (in_flight=%d, max_workers=%d)",
+                                      len(started), len(self._in_flight),
+                                      self.state.max_workers)
             except Exception:
                 self.log.exception("Unexpected error in monitor loop")
 
             if self.state.running:
                 time.sleep(self.poll_interval)
+
+        # Shutdown executor
+        if self._executor:
+            self._executor.shutdown(wait=False)
+            self._executor = None
 
         self._cleanup_pid_file()
         self.log.info("Conductor stopped (processed=%d, failed=%d, escalations=%d)",
