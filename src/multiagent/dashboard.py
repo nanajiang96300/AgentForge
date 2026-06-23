@@ -81,10 +81,11 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 <title>{title} — AgentForge</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:false,theme:'dark',securityLevel:'loose'}});</script>
 {_CSS}
 </head><body><div class="container">
-<header><h1>🤖 AgentForge Dashboard</h1>
-<div class="sub">Pipeline Monitoring • <a href="/designer" style="color:var(--purple);">Designer</a> • <a href="/commands" style="color:var(--purple);">Commands</a></div></header>
+<header><h1><a href="/" style="color:var(--purple);text-decoration:none;">🤖 AgentForge Dashboard</a></h1>
+<div class="sub"><a href="/" style="color:var(--blue);">Pipeline Monitoring</a> • <a href="/designer" style="color:var(--purple);">Designer</a> • <a href="/commands" style="color:var(--purple);">Commands</a></div></header>
 <div class="refresh" id="clock"></div>
 <script>document.getElementById('clock').textContent='Updated: '+new Date().toLocaleTimeString()</script>
 {body}
@@ -199,7 +200,7 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 body.append(f'<div class="stat-card"><div class="label">Total Calls</div><div class="value">{metrics[0]}</div></div>')
                 body.append(f'<div class="stat-card"><div class="label">Input Tokens</div><div class="value">{_token_fmt(metrics[1] or 0)}</div></div>')
                 body.append(f'<div class="stat-card"><div class="label">Output Tokens</div><div class="value">{_token_fmt(metrics[2] or 0)}</div></div>')
-                body.append(f'<div class="stat-card"><div class="label">Total Cost</div><div class="value green">\${metrics[3] or 0:.2f}</div></div>')
+                body.append(f'<div class="stat-card"><div class="label">Total Cost</div><div class="value green">${metrics[3] or 0:.2f}</div></div>')
                 body.append('</div>')
 
             # ── Charts Section (Fix 3A) ──
@@ -228,7 +229,7 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                         f'<td>{_pipeline_html(db, t["id"])}</td>'
                         f'<td>{_progress_html(db, t["id"])}</td>'
                         f'<td>{_token_fmt(t["tokens_in"])} / {_token_fmt(t["tokens_out"])}</td>'
-                        f'<td>\${t["cost"]:.4f}</td>'
+                        f'<td>${t["cost"]:.4f}</td>'
                         '</tr>')
                 body.append('</table></div>')
 
@@ -259,8 +260,9 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 
             # ── Charts + Search/Filter + DAG JavaScript ──
             body.append('<script>'
-                '// -- Charts (Fix 3A)'
+                '// -- Charts (Fix 3A)\n'
                 'fetch("/api/timeseries").then(function(r){return r.json()}).then(function(d){'
+                'try{'
                 'if(d.token_trend&&d.token_trend.length){'
                 'new Chart(document.getElementById("tokenChart"),{'
                 'type:"bar",data:{labels:d.token_trend.map(function(x){return x.date}),'
@@ -277,8 +279,17 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 'options:{responsive:true,maintainAspectRatio:false,'
                 'plugins:{legend:{labels:{color:"#8b949e"}}},'
                 'scales:{x:{ticks:{color:"#8b949e"}},y:{min:0,max:100,ticks:{color:"#8b949e"}}}}});'
-                '}});'
-                '// -- Search/Filter (Fix 3B)'
+                '}else{'
+                'document.getElementById("tokenChart").parentElement.innerHTML+='
+                '"<p style=\\"color:var(--muted);text-align:center;padding:20px;\\">No chart data yet — run tasks to populate</p>";'
+                '}}catch(e){'
+                'document.getElementById("tokenChart").parentElement.innerHTML+='
+                '"<p style=\\"color:var(--red);text-align:center;padding:10px;\\">Chart error: "+e.message+"</p>";'
+                '}}).catch(function(e){'
+                'document.getElementById("tokenChart").parentElement.innerHTML+='
+                '"<p style=\\"color:var(--red);\\">Failed to load trend data</p>";'
+                '});'
+                '// -- Search/Filter (Fix 3B)\n'
                 '(function(){'
                 'var search=document.getElementById("searchInput");'
                 'var status=document.getElementById("statusFilter");'
@@ -292,8 +303,9 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 'row.style.display=(mid&&ms)?"":"none";});}'
                 'search.addEventListener("input",filter);'
                 'status.addEventListener("change",filter);})();'
-                '// -- Workflow DAG (Fix 3C)'
+                '// -- Workflow DAG (Fix 3C)\n'
                 'fetch("/api/workflow-dag").then(function(r){return r.json()}).then(function(d){'
+                'try{'
                 'if(d.error||!d.nodes.length){'
                 'document.getElementById("mermaid-container").innerHTML='
                 '"<span style=\\"color:var(--muted)\\">No workflow DAG available</span>";return;}'
@@ -305,7 +317,11 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 'd.edges.forEach(function(e){graph.push(e.source+"-->"+e.target);});'
                 'var mc=document.getElementById("mermaid-container");'
                 'mc.innerHTML="<div class=\\"mermaid\\">"+graph.join("\\n")+"</div>";'
-                'mermaid.run({nodes:[mc.querySelector(".mermaid")]});'
+                'try{{mermaid.run({{nodes:[mc.querySelector(".mermaid")]}});}}catch(e2){{'
+                'mc.innerHTML="<span style=\\"color:var(--red)\\">DAG render error: "+e2.message+"</span>";}}'
+                '}catch(e){'
+                'document.getElementById("mermaid-container").innerHTML='
+                '"<span style=\\"color:var(--red)\\">DAG error: "+e.message+"</span>";}'
                 '}).catch(function(e){'
                 'document.getElementById("mermaid-container").innerHTML='
                 '"<span style=\\"color:var(--muted)\\">Workflow DAG unavailable</span>";});'
@@ -476,8 +492,42 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
             "description": a.description[:60]
         } for a in agents_list])
 
+        templates_json = json.dumps({a.name: {
+            "description": a.description, "timeout": a.timeout,
+            "output_required": a.output_required,
+            "permissions": a.permissions,
+            "skill": a.skill, "model": a.model, "session": a.session,
+        } for a in agents_list})
+
         body = f"""<div class="section"><h2>🎨 Workflow Designer</h2>
-<div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;" id="agent-btns"></div>
+<div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;" id="agent-btns"></div>
+<div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px;">
+<details style="cursor:pointer;"><summary style="color:var(--blue);font-weight:600;margin-bottom:8px;">➕ Create Custom Agent Role</summary>
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:8px;">
+<div><label style="color:var(--muted);font-size:0.8em;">Clone Template</label>
+<select id="newAgentTemplate" onchange="applyTemplate()" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;">
+<option value="">— Start from scratch —</option>
+</select></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Agent Name *</label>
+<input type="text" id="newAgentName" placeholder="e.g. reviewer" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Description</label>
+<input type="text" id="newAgentDesc" placeholder="What this agent does" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Model</label>
+<input type="text" id="newAgentModel" placeholder="deepseek/deepseek-chat" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Timeout (s)</label>
+<input type="number" id="newAgentTimeout" value="600" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Output Required (comma-separated)</label>
+<input type="text" id="newAgentOutput" placeholder="verdict, summary" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Write Paths (comma-separated)</label>
+<input type="text" id="newAgentWrite" placeholder="src/" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Read Paths (comma-separated)</label>
+<input type="text" id="newAgentRead" placeholder="src/, tests/" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Deny Paths (comma-separated)</label>
+<input type="text" id="newAgentDeny" placeholder="tests/" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div><label style="color:var(--muted);font-size:0.8em;">Skill Path</label>
+<input type="text" id="newAgentSkill" placeholder="architectures/dev-test-loop/skills/xxx/SKILL.md" style="width:100%;padding:6px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"></div>
+<div style="grid-column:1/-1;"><button onclick="addCustomAgent()" style="padding:8px 20px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">+ Create Role</button></div>
+</div></details></div>
 <div style="display:grid; grid-template-columns: 1fr 280px; gap: 12px;">
 <div style="background:var(--card); border:1px solid var(--border); border-radius:8px; min-height:400px;">
 <svg id="canvas" width="100%" height="420" style="display:block;">
@@ -494,11 +544,16 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 <pre id="yaml-out" style="background:#0d1117;color:var(--green);padding:10px;border-radius:4px;font-size:0.7em;max-height:180px;overflow:auto;"></pre>
 </div></div></div>
 <script>
+const TEMPLATES = {templates_json};
 const AGENTS = {agents_json};
+(function(){{var sel=document.getElementById("newAgentTemplate");Object.keys(TEMPLATES).forEach(function(k){{var o=document.createElement("option");o.value=k;o.textContent=k.toUpperCase();sel.appendChild(o);}});}})();
+function applyTemplate(){{var k=document.getElementById("newAgentTemplate").value;var t=TEMPLATES[k];if(!t)return;document.getElementById("newAgentDesc").value=t.description||"";document.getElementById("newAgentTimeout").value=t.timeout||600;document.getElementById("newAgentModel").value=t.model||"deepseek/deepseek-chat";document.getElementById("newAgentOutput").value=(t.output_required||[]).join(", ");var p=t.permissions||{{}};document.getElementById("newAgentWrite").value=(p.write||[]).join(", ");document.getElementById("newAgentRead").value=(p.read||[]).join(", ");document.getElementById("newAgentDeny").value=(p.deny||[]).join(", ");document.getElementById("newAgentSkill").value=t.skill||"";}}
 let nodes=[],edges=[];
 if(loadState()){{draw();setTimeout(function(){{upSel&&upSel();setInterval(upSel,800);}},200);}}
 
-function addNode(name){{var a=AGENTS.find(x=>x.name===name);var n={{id:'n'+Date.now()+'_'+Math.random().toString(36).substr(2,5),label:name.toUpperCase(),agent:name,x:80+nodes.length*20,y:80+nodes.length*25,timeout:a?a.timeout:300}};nodes.push(n);draw();saveState();}}
+function addNode(name){{var a=AGENTS.find(x=>x.name===name);var same=nodes.filter(function(n){{return n.agent===name;}}).length;var suffix=same>0?' '+(same+1):'';var n={{id:'n'+Date.now()+'_'+Math.random().toString(36).substr(2,5),label:name.toUpperCase()+suffix,agent:name,x:80+nodes.length*20,y:80+nodes.length*25,timeout:a?a.timeout:300}};nodes.push(n);draw();saveState();}}
+
+function addCustomAgent(){{var name=document.getElementById('newAgentName').value.trim();var desc=document.getElementById('newAgentDesc').value.trim();var timeout=parseInt(document.getElementById('newAgentTimeout').value)||600;var model=document.getElementById('newAgentModel').value.trim()||'deepseek/deepseek-chat';var outputReq=document.getElementById('newAgentOutput').value.split(',').map(function(s){{return s.trim();}}).filter(Boolean);var skill=document.getElementById('newAgentSkill').value.trim();var writePaths=document.getElementById('newAgentWrite').value.split(',').map(function(s){{return s.trim();}}).filter(Boolean);var readPaths=document.getElementById('newAgentRead').value.split(',').map(function(s){{return s.trim();}}).filter(Boolean);var denyPaths=document.getElementById('newAgentDeny').value.split(',').map(function(s){{return s.trim();}}).filter(Boolean);if(!name){{alert('Agent name is required');return;}}if(AGENTS.find(function(a){{return a.name===name;}})){{alert('Agent '+name+' already exists');return;}}var agentInfo={{name:name,description:desc||name+' step',timeout:timeout,model:model,output_required:outputReq,permissions:{{write:writePaths,read:readPaths,deny:denyPaths}},skill:skill}};AGENTS.push(agentInfo);if(!TEMPLATES[name]){{TEMPLATES[name]=agentInfo;var sel=document.getElementById('newAgentTemplate');var o=document.createElement('option');o.value=name;o.textContent=name.toUpperCase();sel.appendChild(o);}}var b=document.createElement('button');b.textContent='+'+name.toUpperCase();b.title=desc||name;b.onclick=function(){{addNode(name);}};b.style.cssText='padding:8px 14px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;';document.getElementById('agent-btns').appendChild(b);document.getElementById('newAgentName').value='';document.getElementById('newAgentDesc').value='';}}
 
 function addEdge(f,t){{if(f&&t&&f!==t&&f!=='—'&&t!=='—'){{edges.push({{from:f,to:t}});draw();saveState();}}}}
 
