@@ -82,6 +82,8 @@ class AgentRegistry:
                 memory=cfg.get("memory", ""),
                 session=cfg.get("session", "per-issue"),
                 runtime=cfg.get("runtime", ""),
+                timeout=cfg.get("timeout", 600),
+                output_required=cfg.get("output", {}).get("required", []),
             )
             cls.register(config)
             count += 1

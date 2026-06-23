@@ -26,6 +26,35 @@ EVENT_COLORS = {
     "escalated": COLOR_ESCALATED,
 }
 
+# ── Notifier Registry (P1 fix) ──
+
+_notifier_registry: dict[str, type] = {}
+
+
+def register_notifier(name: str, factory):
+    """Register a notification channel factory."""
+    _notifier_registry[name] = factory
+
+
+def get_notifier(name: str, **kwargs):
+    """Create a notifier by name from registry."""
+    factory = _notifier_registry.get(name)
+    if factory:
+        return factory(**kwargs)
+    return None
+
+
+def list_notifiers() -> list[str]:
+    """List registered notification channels."""
+    return list(_notifier_registry.keys())
+
+
+# Register built-in notifiers
+register_notifier("discord-webhook", lambda **kw: DiscordNotifier(kw.get("webhook_url", "")))
+register_notifier("discord-channel", lambda **kw: DiscordChannelNotifier(
+    kw.get("bot_token", ""), kw.get("channel_id", "")))
+
+
 EVENT_LABELS = {
     "started": "🔄 Pipeline Started",
     "completed": "✅ Pipeline Completed",
