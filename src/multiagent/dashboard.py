@@ -80,7 +80,7 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 <title>{title} — AgentForge</title>{_CSS}
 </head><body><div class="container">
 <header><h1>🤖 AgentForge Dashboard</h1>
-<div class="sub">Pipeline Monitoring • Auto-refresh 15s</div></header>
+<div class="sub">Pipeline Monitoring • <a href="/designer" style="color:var(--purple);">Designer</a> • <a href="/commands" style="color:var(--purple);">Commands</a></div></header>
 <div class="refresh" id="clock"></div>
 <script>document.getElementById('clock').textContent='Updated: '+new Date().toLocaleTimeString()</script>
 {body}
@@ -247,6 +247,105 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 
     @app.route("/health")
     def health():
-        return jsonify({"status": "ok", "version": "0.3.0"}), 200
+        return jsonify({"status": "ok", "version": "0.6.0-dev"}), 200
+
+    # ── B2: Visual Workflow Designer ──
+
+    @app.route("/designer")
+    def designer():
+        from .runtime.registry import AgentRegistry
+        agents_list = AgentRegistry.list_all()
+        agents_json = json.dumps([{
+            "name": a.name, "timeout": a.timeout,
+            "description": a.description[:60]
+        } for a in agents_list])
+
+        body = f"""<div class="section"><h2>🎨 Workflow Designer</h2>
+<div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;" id="agent-btns"></div>
+<div style="display:grid; grid-template-columns: 1fr 280px; gap: 12px;">
+<div style="background:var(--card); border:1px solid var(--border); border-radius:8px; min-height:400px;">
+<svg id="canvas" width="100%" height="420" style="display:block;">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#58a6ff"/></marker></defs>
+</svg></div>
+<div>
+<div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+<h3 style="margin-bottom:8px;font-size:0.9em;">🔗 Connect</h3>
+<select id="efrom" style="width:100%;padding:6px;margin-bottom:4px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"><option>— From —</option></select>
+<select id="eto" style="width:100%;padding:6px;margin-bottom:8px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;"><option>— To —</option></select>
+<button onclick="addEdge(document.getElementById('efrom').value,document.getElementById('eto').value)" style="width:100%;padding:8px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer;">Connect</button>
+</div>
+<button onclick="exportYAML()" style="width:100%;padding:10px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;margin-bottom:8px;">📋 Export YAML</button>
+<pre id="yaml-out" style="background:#0d1117;color:var(--green);padding:10px;border-radius:4px;font-size:0.7em;max-height:180px;overflow:auto;"></pre>
+</div></div></div>
+<script>
+const AGENTS = {agents_json};
+let nodes=[],edges=[];
+
+function addNode(name){{var a=AGENTS.find(x=>x.name===name);var n={{id:'n'+Date.now(),label:name.toUpperCase(),agent:name,x:80+nodes.length*20,y:80+nodes.length*25,timeout:a?a.timeout:300}};nodes.push(n);draw();}}
+
+function addEdge(f,t){{if(f&&t&&f!==t&&f!=='—'&&t!=='—'){{edges.push({{from:f,to:t}});draw();}}}}
+
+function removeNode(id){{nodes=nodes.filter(n=>n.id!==id);edges=edges.filter(e=>e.from!==id&&e.to!==id);draw();}}
+
+function draw(){{
+var s=document.getElementById('canvas');s.innerHTML='';
+var defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+defs.innerHTML='<marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#58a6ff\"/></marker>';
+s.appendChild(defs);
+edges.forEach(e=>{{var f=nodes.find(n=>n.id===e.from),t=nodes.find(n=>n.id===e.to);if(f&&t){{var l=document.createElementNS('http://www.w3.org/2000/svg','line');l.setAttribute('x1',f.x+60);l.setAttribute('y1',f.y+25);l.setAttribute('x2',t.x+60);l.setAttribute('y2',t.y+25);l.setAttribute('stroke','#58a6ff');l.setAttribute('stroke-width','2');l.setAttribute('marker-end','url(#arrow)');s.appendChild(l);}}}});
+nodes.forEach(n=>{{var g=document.createElementNS('http://www.w3.org/2000/svg','g');g.setAttribute('transform','translate('+n.x+','+n.y+')');g.style.cursor='move';var r=document.createElementNS('http://www.w3.org/2000/svg','rect');r.setAttribute('width','120');r.setAttribute('height','50');r.setAttribute('rx','8');r.setAttribute('fill','#161b22');r.setAttribute('stroke','#30363d');r.setAttribute('stroke-width','2');g.appendChild(r);var t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x','60');t.setAttribute('y','20');t.setAttribute('text-anchor','middle');t.setAttribute('fill','#c9d1d9');t.setAttribute('font-size','13');t.setAttribute('font-weight','600');t.textContent=n.label;g.appendChild(t);var u=document.createElementNS('http://www.w3.org/2000/svg','text');u.setAttribute('x','60');u.setAttribute('y','38');u.setAttribute('text-anchor','middle');u.setAttribute('fill','#8b949e');u.setAttribute('font-size','11');u.textContent=n.timeout+'s';g.appendChild(u);var drag=null,ox,oy;g.onmousedown=function(ev){{drag=n;ox=ev.clientX-n.x;oy=ev.clientY-n.y;}};g.ondblclick=function(){{removeNode(n.id);}};s.appendChild(g);}});
+var upSel=function(){{
+['efrom','eto'].forEach(id=>{{var sel=document.getElementById(id),v=sel.value;sel.innerHTML='<option>—</option>';nodes.forEach(n=>sel.innerHTML+='<option value=\"'+n.id+'\">'+n.label+'</option>');if(v)sel.value=v;}});}};
+document.onmousemove=function(e){{if(window._dragNode){{window._dragNode.x=e.clientX-window._dragOffX;window._dragNode.y=e.clientY-window._dragOffY;draw();}}}};
+document.onmouseup=function(){{window._dragNode=null;}};
+// Re-bind drag vars at global scope
+nodes.forEach(n=>{{var orig=n;var g=document.querySelectorAll('g');g.forEach(gg=>{{if(gg.querySelector('text')&&gg.querySelector('text').textContent===orig.label){{gg.onmousedown=function(ev){{window._dragNode=orig;window._dragOffX=ev.clientX-orig.x;window._dragOffY=ev.clientY-orig.y;}};}}}});}});
+setInterval(upSel,800);
+}}
+
+function exportYAML(){{
+var steps=nodes.map(n=>{{var deps=edges.filter(e=>e.to===n.id).map(e=>{{var f=nodes.find(nn=>nn.id===e.from);return f?f.agent+'_step':'';}}).filter(Boolean);return{{id:n.agent+'_step',agent:n.agent,description:n.agent+' step',timeout:n.timeout,depends_on:deps.length?deps:undefined}};}});
+var y=['workflow:','  id: custom','  steps:'];
+steps.forEach(s=>{{y.push('    - id: '+s.id);y.push('      agent: '+s.agent);y.push('      timeout: '+s.timeout);if(s.depends_on)y.push('      depends_on: '+JSON.stringify(s.depends_on));}});
+document.getElementById('yaml-out').textContent=y.join('\\n');
+}}
+
+var btns=document.getElementById('agent-btns');
+AGENTS.forEach(a=>{{var b=document.createElement('button');b.textContent='+'+a.name.toUpperCase();b.title=a.description;b.onclick=function(){{addNode(a.name);}};b.style.cssText='padding:8px 14px;background:var(--purple);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;';btns.appendChild(b);}});
+</script>"""
+        return _render_page("Designer", body)
+
+    # ── B3: Web Command Center ──
+
+    @app.route("/commands", methods=["GET", "POST"])
+    def commands():
+        result = ""
+        if request.method == "POST":
+            cmd = request.form.get("command", "")
+            try:
+                import subprocess
+                r = subprocess.run(
+                    [".venv/bin/python", "-m", "multiagent.pm_cli"] + cmd.split(),
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(db_path.parent)
+                )
+                result = r.stdout + r.stderr
+            except Exception as e:
+                result = f"Error: {e}"
+
+        body = f"""<div class="section"><h2>⚡ Command Center</h2>
+<div class="grid">
+<div class="stat-card" style="cursor:pointer;" onclick="runCmd('pm list')"><div class="label">📋 List Tasks</div></div>
+<div class="stat-card" style="cursor:pointer;" onclick="runCmd('conductor status')"><div class="label">📊 Status</div></div>
+<div class="stat-card" style="cursor:pointer;" onclick="runCmd('metrics')"><div class="label">💰 Costs</div></div>
+<div class="stat-card" style="cursor:pointer;" onclick="runCmd('agent list')"><div class="label">🤖 Agents</div></div>
+</div>
+<form method="post" style="margin-top:16px;">
+<input name="command" id="cmd-input" placeholder="e.g. conductor status" style="width:100%;padding:10px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:1em;margin-bottom:8px;">
+<button type="submit" style="padding:10px 24px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Run</button>
+</form>
+<pre id="cmd-result" style="background:#0d1117;color:var(--green);padding:12px;border-radius:4px;margin-top:12px;max-height:400px;overflow:auto;">{result}</pre>
+<script>function runCmd(c){{document.getElementById('cmd-input').value=c;document.forms[0].submit();}}</script></div>"""
+        return _render_page("Commands", body)
 
     return app
