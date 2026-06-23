@@ -317,6 +317,32 @@ AGENTS.forEach(a=>{{var b=document.createElement('button');b.textContent='+'+a.n
 
     # ── B3: Web Command Center ──
 
+    # ── B5: Graph API ──
+
+    @app.route("/api/graph/export", methods=["POST"])
+    def api_graph_export():
+        """Export graph JSON to workflow YAML."""
+        from .core.graph_engine import WorkflowGraph
+        try:
+            data = request.get_json(force=True)
+            g = WorkflowGraph.from_json(data)
+            yaml_str = g.to_workflow_yaml()
+            return jsonify({"yaml": yaml_str, "status": "ok"})
+        except Exception as e:
+            return jsonify({"error": str(e), "status": "error"}), 400
+
+    @app.route("/api/graph/from-agents", methods=["POST"])
+    def api_graph_from_agents():
+        """Create linear graph from agent names list."""
+        from .core.graph_engine import WorkflowGraph
+        try:
+            data = request.get_json(force=True)
+            agents = data.get("agents", [])
+            g = WorkflowGraph.from_registry(agents)
+            return jsonify(g.to_json())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
     @app.route("/commands", methods=["GET", "POST"])
     def commands():
         result = ""
