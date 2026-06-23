@@ -24,12 +24,17 @@ class StepResult:
     retry_count: int = 0; started_at: Optional[str] = None; completed_at: Optional[str] = None
 
 class AgentSpawner:
-    def __init__(self, db: StateDB, roles_config: dict, adapter: Optional[AgentAdapter] = None):
+    def __init__(self, db: StateDB, roles_config: dict, adapter: Optional[AgentAdapter] = None,
+                 prompt_search_paths: list = None):
         self.db = db; self.roles = roles_config
         if adapter is None:
             runtime = roles_config.get("global",{}).get("runtime","claude-code")
             adapter = create_adapter(runtime)
         self.adapter = adapter
+        # Prompt template search paths (injected, not Path.cwd())
+        self._prompt_search_paths = prompt_search_paths or [
+            adapter.project_root / "architectures" / "dev-test-loop" / "prompts",
+        ]
 
     def spawn(self, task, step, work_dir=None):
         agent_config = self.roles.get("agents",{}).get(step["agent"],{})
@@ -76,13 +81,15 @@ class AgentSpawner:
         return "\n".join(parts)
 
     def _load_prompt_template(self, agent_type: str) -> str:
-        """Load prompt template from architectures/*/prompts/<agent>.md"""
+        """Load prompt template from injected search paths."""
         try:
-            from pathlib import Path
-            # Search for the template relative to project root
-            prompt_dir = Path.cwd() / "architectures" / "dev-test-loop" / "prompts"
-            template_file = prompt_dir / f"{agent_type}.md"
-            if template_file.exists():
+            template_file = None
+            for search_dir in self._prompt_search_paths:
+                candidate = search_dir / f"{agent_type}.md"
+                if candidate.exists():
+                    template_file = candidate
+                    break
+            if template_file:
                 return template_file.read_text() + "\n\n---\n\n"
         except Exception:
             pass

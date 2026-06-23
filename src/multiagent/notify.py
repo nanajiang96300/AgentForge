@@ -258,3 +258,57 @@ def create_notifier(webhook_url: str = None,
             _log.info("Notification: No Discord configuration found, notifications disabled")
 
     return notifiers
+
+
+# ── StepHook adapter for automatic pipeline progress notifications ──
+
+class NotifierStepHook:
+    """Adapts a list of notifier callables to the StepHook interface.
+
+    Register with orchestrator.register_hook() to auto-send Discord/Slack
+    messages on every step lifecycle event — no manual trigger needed.
+    """
+
+    def __init__(self, notifiers: list, project_name: str = "AgentForge"):
+        self._notifiers = notifiers
+        self._project = project_name
+
+    def before_step(self, task_id: str, step_id: str) -> None:
+        for n in self._notifiers:
+            try:
+                n("started", task_id, self._project,
+                  {"status": "running", "type": f"step:{step_id}"})
+            except Exception:
+                pass
+
+    def after_step(self, task_id: str, step_id: str, result=None) -> None:
+        output = getattr(result, "output", {}) or {}
+        status = getattr(result, "status", None)
+        status_str = str(status.value) if hasattr(status, "value") else str(status or "unknown")
+        task_dict = {"status": status_str, "type": f"step:{step_id}"}
+        if hasattr(result, "error") and result.error:
+            task_dict["error"] = str(result.error)[:500]
+        for n in self._notifiers:
+            try:
+                event = "completed" if status_str == "completed" else "failed"
+                n(event, task_id, self._project, task_dict)
+            except Exception:
+                pass
+
+    def on_rejection(self, task_id: str, step_id: str, count: int) -> None:
+        for n in self._notifiers:
+            try:
+                n("escalated", task_id, self._project,
+                  {"status": "rejected", "type": f"step:{step_id}",
+                   "rejection_count": count})
+            except Exception:
+                pass
+
+    def on_escalation(self, task_id: str, step_id: str, reason: str) -> None:
+        for n in self._notifiers:
+            try:
+                n("escalated", task_id, self._project,
+                  {"status": "escalated", "type": f"step:{step_id}",
+                   "error": reason})
+            except Exception:
+                pass

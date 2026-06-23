@@ -19,6 +19,7 @@ from typing import Optional
 
 from .db import StateDB, Task, now_iso
 from .engine import AgentSpawner, StepResult, StepStatus, load_yaml
+from .interfaces import StepHook
 
 
 class StepState(Enum):
@@ -72,7 +73,12 @@ class WorkflowOrchestrator:
         self._step_results: dict[str, dict] = {}  # step_id → last output
         self._step_attempts: dict[str, int] = {}  # step_id → attempt count (persists across recursive calls)
         self._total_executions: int = 0  # global execution counter for hard cap
+        self._hooks: list[StepHook] = []  # lifecycle hooks (before/after/rejection/escalation)
         self._lock = threading.Lock()  # Protects _step_results in parallel mode
+
+    def register_hook(self, hook: StepHook) -> None:
+        """Register a lifecycle hook. Hooks are called in registration order."""
+        self._hooks.append(hook)
 
     def load(self):
         """加载并验证工作流 YAML"""
@@ -184,6 +190,8 @@ class WorkflowOrchestrator:
             if self._total_executions > self.MAX_TOTAL_STEP_EXECUTIONS:
                 step.state = StepState.FAILED
                 self.db.update_task_status(task.id, "escalated", step.id)
+                self._fire_hook("on_escalation", task.id, step.id,
+                                f"Global cap ({self.MAX_TOTAL_STEP_EXECUTIONS}) exceeded")
                 return StepResult(
                     step_id=step.id, agent=step.agent,
                     status=StepStatus.CRASHED,
@@ -194,6 +202,8 @@ class WorkflowOrchestrator:
             if attempt > max_retries:
                 step.state = StepState.FAILED
                 self.db.update_task_status(task.id, "escalated", step.id)
+                self._fire_hook("on_escalation", task.id, step.id,
+                                f"Retry cap ({max_retries}) exceeded after {attempt} attempts")
                 return StepResult(
                     step_id=step.id, agent=step.agent,
                     status=StepStatus.CRASHED,
@@ -203,6 +213,9 @@ class WorkflowOrchestrator:
             # Record attempt count (persists across iterations for DB tracking)
             self._step_attempts[step.id] = attempt
 
+            # ── Fire before_step hooks ──
+            self._fire_hook("before_step", task.id, step.id)
+
             # Spawn
             process = self.spawner.spawn(task, step_def)
             step.state = StepState.RUNNING
@@ -210,6 +223,9 @@ class WorkflowOrchestrator:
             # Monitor
             result = self.spawner.monitor(task, step_def, process, timeout=step.timeout)
             result.retry_count = attempt
+
+            # ── Fire after_step hooks ──
+            self._fire_hook("after_step", task.id, step.id, result)
 
             # Handle result — returns (result, should_retry)
             should_retry = self._handle_result(task, step, result)
@@ -273,6 +289,7 @@ class WorkflowOrchestrator:
         if rejection_count < max_rejections:
             # 回到上一步（dev_fix），同时重置当前步骤等待重新验证
             step.state = StepState.PENDING
+            self._fire_hook("on_rejection", task.id, step.id, rejection_count)
             dev_step_id = step.on_verdict_rejected.get("next", "")
             if dev_step_id and dev_step_id in self.steps:
                 dev_step = self.steps[dev_step_id]
@@ -287,6 +304,8 @@ class WorkflowOrchestrator:
             # 超过重试上限 → escalated
             step.state = StepState.FAILED
             self.db.update_task_status(task.id, "escalated", step.id)
+            self._fire_hook("on_escalation", task.id, step.id,
+                            f"Max rejections ({max_rejections}) reached")
             return False
 
     def _check_condition(self, condition: str, context: dict) -> bool:
@@ -385,6 +404,23 @@ class WorkflowOrchestrator:
             "steps": {sid: s.state.value for sid, s in self.steps.items()},
             "results": self._step_results,
         }
+
+    def _fire_hook(self, event: str, task_id: str, step_id: str, extra=None) -> None:
+        """Dispatch a lifecycle event to all registered hooks. Errors in hooks are logged but never propagate."""
+        import logging
+        _log = logging.getLogger("multiagent.hooks")
+        for hook in self._hooks:
+            try:
+                if event == "before_step":
+                    hook.before_step(task_id, step_id)
+                elif event == "after_step":
+                    hook.after_step(task_id, step_id, extra)  # extra = StepResult
+                elif event == "on_rejection":
+                    hook.on_rejection(task_id, step_id, extra)  # extra = rejection_count
+                elif event == "on_escalation":
+                    hook.on_escalation(task_id, step_id, extra)  # extra = reason string
+            except Exception:
+                _log.exception("Hook %s.%s failed", type(hook).__name__, event)
 
     def _can_parallelize(self, steps: list[WorkflowStep]) -> bool:
         """检查多个步骤是否可以并行执行（无交叉依赖）"""

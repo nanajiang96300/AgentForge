@@ -18,6 +18,24 @@ from .orchestrator import WorkflowOrchestrator
 from .config.loader import find_state_db, find_roles_yaml
 
 
+def _wire_hooks(orchestrator):
+    """Register notification hooks so pipeline progress auto-sends to Discord/Slack."""
+    try:
+        from .notify import create_notifier, NotifierStepHook
+        import logging
+        _log = logging.getLogger("multiagent.hooks")
+
+        notifiers = create_notifier()
+        if notifiers:
+            hook = NotifierStepHook(notifiers)
+            orchestrator.register_hook(hook)
+            _log.info("Step hooks wired: %d notifier(s)", len(notifiers))
+        else:
+            _log.debug("No notifiers configured — hooks disabled")
+    except Exception:
+        pass  # hooks are optional; never block workflow execution
+
+
 def parse_run_args(argv=None):
     """解析 multiagent run 命令参数，返回 dict"""
     if argv is None:
@@ -190,6 +208,9 @@ def cmd_run(db=None, workflow_path=None, task_id=None, dry_run=False, roles_path
 
         spawner = AgentSpawner(db, roles)
         orchestrator = WorkflowOrchestrator(db, spawner, wf_path)
+
+        # Wire up notification hooks (Discord/Slack) for automatic progress updates
+        _wire_hooks(orchestrator)
 
         # Mark task as running
         db.update_task_status(task_id, "running")
