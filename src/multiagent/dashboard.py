@@ -239,4 +239,8 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
         finally:
             db.close()
 
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "ok", "version": "0.3.0"}), 200
+
     return app
