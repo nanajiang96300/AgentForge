@@ -34,6 +34,7 @@ MODULES = [
     ("Engine Process: killpg + reap", "test_engine_process.py"),
     ("Graph Engine: DAG building + serialization", "test_graph_engine.py"),
     ("Agent Registry: CRUD + YAML + workflow steps", "test_agent_registry.py"),
+    ("PM Search: keyword + status filter", "test_pm_search.py"),
 ]
 
 def run_module(path, timeout=30):

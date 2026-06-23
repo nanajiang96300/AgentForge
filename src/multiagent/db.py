@@ -111,6 +111,14 @@ class StateDB:
 
     def update_task_status(self, task_id: str, status: str, current_step: Optional[str] = None):
         with self._write_lock:
+            # Status guard: never downgrade from a terminal status
+            row = self.conn.execute(
+                "SELECT status FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            current_status = row[0] if row else None
+            if current_status in ("completed", "failed", "escalated") and status not in ("completed", "failed", "escalated"):
+                return  # Refuse to overwrite terminal status with non-terminal
+
             fields = ["status = ?"]; params: list[Any] = [status]
             if current_step: fields.append("current_step = ?"); params.append(current_step)
             if status == "completed": fields.append("completed_at = ?"); params.append(now_iso())
@@ -203,6 +211,36 @@ class StateDB:
                    WHERE id = ?""", (resolution, now_iso(), escalation_id))
             self.conn.commit()
             return True
+
+    def search_tasks(self, keyword: str, status: str = None) -> list[dict]:
+        """Search tasks by keyword in requirements text, optionally filtered by status."""
+        query = """SELECT id, type, source, workflow_id, current_step, status,
+                   retry_count, rejection_count, dedup_key, context,
+                   created_at, claimed_at, completed_at
+            FROM tasks WHERE context LIKE ?"""
+        params = [f"%{keyword}%"]
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        rows = self.conn.execute(query, params).fetchall()
+        cols = ["id", "type", "source", "workflow_id", "current_step", "status",
+                "retry_count", "rejection_count", "dedup_key", "context",
+                "created_at", "claimed_at", "completed_at"]
+        results = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            # Parse context from JSON string to dict
+            ctx = d.get("context")
+            if isinstance(ctx, str):
+                try: parsed = json.loads(ctx)
+                except: parsed = {}
+                d["context"] = parsed
+                d["context_parsed"] = parsed
+            elif isinstance(ctx, dict):
+                d["context_parsed"] = ctx
+            results.append(d)
+        return results
 
     def get_pending_tasks(self) -> list[dict]:
         """获取所有状态为 pending 的任务（Conductor 用）"""
