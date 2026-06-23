@@ -155,8 +155,8 @@ def cmd_start(args):
 
 def cmd_status(args):
     """查看 Conductor 状态"""
-    db_path = _find_db()
-    workflow_path = _find_workflow()
+    db_path = find_state_db()
+    workflow_path = find_workflow_yaml()
     if not workflow_path:
         print("Error: No workflow YAML found.")
         return 1
@@ -267,7 +267,7 @@ def cmd_status(args):
 
 def cmd_stop(args):
     """停止 Conductor"""
-    pid_file = Path(args.pid_file) if args.pid_file else _find_db().parent / ".conductor.pid"
+    pid_file = Path(args.pid_file) if args.pid_file else find_state_db().parent / ".conductor.pid"
 
     # Method 1: PID file
     if pid_file.exists():
@@ -298,7 +298,7 @@ def cmd_stop(args):
             return 0
 
     # Method 2: DB stop signal
-    db_path = _find_db()
+    db_path = find_state_db()
     db = StateDB(db_path)
     db.connect()
     try:
@@ -325,7 +325,7 @@ def cmd_restart(args):
 
 def cmd_alerts(args):
     """查看待处理的升级事件"""
-    db_path = _find_db()
+    db_path = find_state_db()
     db = StateDB(db_path)
     db.connect()
 
@@ -391,7 +391,7 @@ def cmd_reject(args):
         print("Usage: multiagent conductor reject <task_id>")
         return 1
 
-    db_path = _find_db()
+    db_path = find_state_db()
     db = StateDB(db_path)
     db.connect()
 

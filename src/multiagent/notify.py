@@ -177,20 +177,40 @@ class DiscordChannelNotifier:
                 },
             )
             with urlopen(req, timeout=10) as resp:
-                if resp.status not in (200, 201, 204):
-                    _log.warning("Discord channel message returned %d", resp.status)
+                if resp.status in (200, 201, 204):
+                    _log.info("Discord notification sent: %s → %s", event, task_id)
+                else:
+                    body = resp.read().decode("utf-8", errors="replace")[:200]
+                    _log.warning("Discord channel message returned %d: %s", resp.status, body)
         except Exception as e:
-            _log.error("Discord channel message failed: %s", e)
+            _log.error("Discord channel message failed for %s/%s: %s", event, task_id, e)
 
 
 def _load_claudeclaw_config() -> dict:
-    """尝试加载 ClaudeClaw settings.json 获取 bot token 和 channel 信息"""
+    """尝试加载 ClaudeClaw settings.json 获取 bot token 和 channel 信息。
+    搜索多个可能路径以兼容 daemon 子进程的工作目录变化。"""
     try:
         import json as _j
         from pathlib import Path as _P
-        cfg_path = _P(".claude/claudeclaw/settings.json")
-        if cfg_path.exists():
-            return _j.loads(cfg_path.read_text())
+        import os as _os
+        # Search multiple paths: relative CWD, and via env/known locations
+        search_paths = [
+            _P(".claude/claudeclaw/settings.json"),
+            _P(_os.environ.get("HOME", "/root")) / ".claude" / "claudeclaw" / "settings.json",
+        ]
+        # Also search from project root if detectable
+        try:
+            for p in [_P.cwd()] + list(_P.cwd().parents):
+                candidate = p / ".claude" / "claudeclaw" / "settings.json"
+                if candidate.exists():
+                    search_paths.insert(0, candidate)
+                    break
+        except Exception:
+            pass
+        for cfg_path in search_paths:
+            if cfg_path.exists():
+                _log.debug("Loaded ClaudeClaw config from %s", cfg_path)
+                return _j.loads(cfg_path.read_text())
     except Exception:
         pass
     return {}
@@ -207,6 +227,7 @@ def create_notifier(webhook_url: str = None,
     notifiers = []
     url = webhook_url or discord_webhook_url
     if url:
+        _log.info("Notification: Discord webhook configured")
         notifiers.append(DiscordNotifier(url))
         return notifiers
 
@@ -220,14 +241,20 @@ def create_notifier(webhook_url: str = None,
         if not token:
             token = cc.get("discord", {}).get("token", "")
         if not channel:
-            guilds = cc.get("discord", {}).get("listenGuilds", [])
             channels = cc.get("discord", {}).get("listenChannels", [])
             if channels:
                 channel = str(channels[0])
-            elif guilds:
-                channel = str(guilds[0])
+            # NOTE: We intentionally do NOT fall back to listenGuilds.
+            # A guild ID is not a valid channel ID for sending messages.
 
     if token and channel:
+        _log.info("Notification: Discord channel bot configured (channel=%s)", channel)
         notifiers.append(DiscordChannelNotifier(token, channel))
+    else:
+        if token and not channel:
+            _log.warning("Notification: Bot token found but no channel ID configured. "
+                         "Add 'listenChannels' to .claude/claudeclaw/settings.json")
+        elif not token:
+            _log.info("Notification: No Discord configuration found, notifications disabled")
 
     return notifiers

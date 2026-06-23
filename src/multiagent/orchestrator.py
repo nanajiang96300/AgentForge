@@ -58,6 +58,11 @@ class WorkflowOrchestrator:
     Phase 3+ 可扩展为完整 DAG 引擎。
     """
 
+    # Hard global cap: maximum total step executions across the entire workflow.
+    # Prevents infinite loops from burning tokens. If this is hit, the task
+    # is force-escalated. Each "execution" = one spawn+monitor cycle.
+    MAX_TOTAL_STEP_EXECUTIONS = 50
+
     def __init__(self, db: StateDB, spawner: AgentSpawner, workflow_path: Path):
         self.db = db
         self.spawner = spawner
@@ -65,6 +70,8 @@ class WorkflowOrchestrator:
         self.workflow_def: dict = {}
         self.steps: dict[str, WorkflowStep] = {}
         self._step_results: dict[str, dict] = {}  # step_id → last output
+        self._step_attempts: dict[str, int] = {}  # step_id → attempt count (persists across recursive calls)
+        self._total_executions: int = 0  # global execution counter for hard cap
         self._lock = threading.Lock()  # Protects _step_results in parallel mode
 
     def load(self):
@@ -158,42 +165,76 @@ class WorkflowOrchestrator:
         return inp
 
     def execute_step(self, task: Task, step: WorkflowStep) -> StepResult:
-        """执行单个步骤"""
-        # 构建步骤定义（传递 output.required 以生成精确 prompt）
+        """执行单个步骤（迭代式，硬限制重试次数，杜绝无限循环）"""
         step_def = {
             "id": step.id,
             "agent": step.agent,
             "description": step.description,
             "timeout": step.timeout,
             "input": self.build_step_input(step, task),
-            "output": step.output,  # Pass required fields to prompt builder
+            "output": step.output,
         }
 
-        # Spawn
-        process = self.spawner.spawn(task, step_def)
-        step.state = StepState.RUNNING
+        max_retries = step.retry.get("max", 3) if isinstance(step.retry, dict) else 3
+        attempt = self._step_attempts.get(step.id, 0)
 
-        # Monitor
-        result = self.spawner.monitor(task, step_def, process, timeout=step.timeout)
-        return self._handle_result(task, step, result)
+        while True:
+            # ── Hard global cap: prevent runaway token burn ──
+            self._total_executions += 1
+            if self._total_executions > self.MAX_TOTAL_STEP_EXECUTIONS:
+                step.state = StepState.FAILED
+                self.db.update_task_status(task.id, "escalated", step.id)
+                return StepResult(
+                    step_id=step.id, agent=step.agent,
+                    status=StepStatus.CRASHED,
+                    error=f"Global step execution cap ({self.MAX_TOTAL_STEP_EXECUTIONS}) exceeded — force escalated"
+                )
 
-    def _handle_result(self, task: Task, step: WorkflowStep, result: StepResult) -> StepResult:
-        """处理步骤执行结果，决定下一步动作"""
+            # ── Per-step retry cap ──
+            if attempt > max_retries:
+                step.state = StepState.FAILED
+                self.db.update_task_status(task.id, "escalated", step.id)
+                return StepResult(
+                    step_id=step.id, agent=step.agent,
+                    status=StepStatus.CRASHED,
+                    error=f"Step retry cap ({max_retries}) exceeded after {attempt} attempts"
+                )
+
+            # Record attempt count (persists across iterations for DB tracking)
+            self._step_attempts[step.id] = attempt
+
+            # Spawn
+            process = self.spawner.spawn(task, step_def)
+            step.state = StepState.RUNNING
+
+            # Monitor
+            result = self.spawner.monitor(task, step_def, process, timeout=step.timeout)
+            result.retry_count = attempt
+
+            # Handle result — returns (result, should_retry)
+            should_retry = self._handle_result(task, step, result)
+
+            if should_retry:
+                attempt += 1
+                continue
+            else:
+                return result
+
+    def _handle_result(self, task: Task, step: WorkflowStep, result: StepResult) -> bool:
+        """处理步骤执行结果。返回 True 表示需要重试，False 表示终态。
+
+        所有重试逻辑由 execute_step 的 while 循环统一管理，
+        这里只做状态判定，不再递归调用 execute_step。
+        """
         # 保存结果
         self._step_results[step.id] = result.output
 
         if result.status == StepStatus.COMPLETED:
             # Schema 校验
-            required = step.output.get("required", [])
+            required = step.output.get("required", []) if isinstance(step.output, dict) else []
             if required and not self.spawner.validate_output(result, required):
-                retry_max = step.retry.get("max", 3)
-                if result.retry_count < retry_max:
-                    step.state = StepState.PENDING
-                    return self.execute_step(task, step)
-                else:
-                    step.state = StepState.FAILED
-                    self.db.update_task_status(task.id, "escalated", step.id)
-                    return result
+                step.state = StepState.PENDING
+                return True  # retry: schema validation failed
 
             # Rejection / Approval 检查 (case-insensitive)
             verdict = str(result.output.get("verdict", "")).lower()
@@ -214,23 +255,18 @@ class WorkflowOrchestrator:
                 self.db.update_task_status(task.id, step.on_success.get("to_state", "assigned"), step.id)
 
         elif result.status in (StepStatus.CRASHED, StepStatus.TIMED_OUT):
-            retry_max = step.retry.get("max", 3)
-            if result.retry_count < retry_max:
-                result.retry_count += 1
-                step.state = StepState.PENDING
-                return self.execute_step(task, step)
-            else:
-                step.state = StepState.FAILED
-                if step.on_failure.get("escalate_on_exhaust", False):
-                    self.db.update_task_status(task.id, "escalated", step.id)
+            step.state = StepState.PENDING
+            return True  # retry: crash or timeout
 
         elif result.status == StepStatus.VALIDATION_FAILED:
-            step.state = StepState.FAILED
+            step.state = StepState.PENDING
+            return True  # retry: validation failed
 
-        return result
+        # All other statuses → terminal
+        return False
 
-    def _handle_rejection(self, task: Task, step: WorkflowStep, result: StepResult) -> StepResult:
-        """处理 Test Agent 的打回"""
+    def _handle_rejection(self, task: Task, step: WorkflowStep, result: StepResult) -> bool:
+        """处理 Test Agent 的打回。返回 True 表示需要重试 dev 步骤。"""
         rejection_count = self.db.increment_rejection(task.id)
         max_rejections = self.workflow_def.get("workflow", {}).get("error_policy", {}).get("max_rejections", 3)
 
@@ -241,15 +277,17 @@ class WorkflowOrchestrator:
             if dev_step_id and dev_step_id in self.steps:
                 dev_step = self.steps[dev_step_id]
                 dev_step.state = StepState.PENDING
-                # 清除之前的 Dev 结果，强制重做
+                # 清除之前的 Dev 结果和尝试计数，强制重做
                 if dev_step_id in self._step_results:
                     del self._step_results[dev_step_id]
+                if dev_step_id in self._step_attempts:
+                    del self._step_attempts[dev_step_id]
+            return False  # rejection is handled by resetting dev step, not by retrying current step
         else:
             # 超过重试上限 → escalated
             step.state = StepState.FAILED
             self.db.update_task_status(task.id, "escalated", step.id)
-
-        return result
+            return False
 
     def _check_condition(self, condition: str, context: dict) -> bool:
         """检查条件表达式（简化版，支持 output.field == 'value'）"""
@@ -286,7 +324,6 @@ class WorkflowOrchestrator:
                     results.append((step, result))
                 except Exception as e:
                     # Step failed catastrophically
-                    from .engine import StepResult, StepStatus
                     result = StepResult(
                         step_id=step.id, agent=step.agent,
                         status=StepStatus.CRASHED, error=str(e),
