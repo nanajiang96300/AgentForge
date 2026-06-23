@@ -15,52 +15,7 @@ from pathlib import Path
 from .db import StateDB, Task, now_iso
 from .engine import AgentSpawner, load_yaml
 from .orchestrator import WorkflowOrchestrator
-
-
-_SKIP_DIRS = {'.venv', '.git', '__pycache__', 'node_modules', '.claude'}
-
-def _is_skip(path):
-    return any(s in path.parts for s in _SKIP_DIRS)
-
-def find_state_db():
-    """查找 state.db"""
-    cwd = Path.cwd()
-    # Check common locations first (fast path)
-    candidates = [
-        cwd / "state.db",
-        cwd / ".framework" / "workflow" / "state.db",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    # Fallback: glob from cwd
-    try:
-        for m in cwd.glob("**/state.db"):
-            if not _is_skip(m):
-                return m
-    except (PermissionError, OSError):
-        pass
-    return cwd / "state.db"
-
-
-def find_roles_yaml():
-    """查找 roles.yaml"""
-    cwd = Path.cwd()
-    # Check common locations first (fast path)
-    candidates = [
-        cwd / "architectures" / "dev-test-loop" / "config" / "roles.yaml",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    # Fallback: glob
-    try:
-        for m in cwd.glob("**/roles.yaml"):
-            if not _is_skip(m):
-                return m
-    except (PermissionError, OSError):
-        pass
-    return None
+from .config.loader import find_state_db, find_roles_yaml
 
 
 def parse_run_args(argv=None):

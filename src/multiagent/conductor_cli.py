@@ -25,31 +25,8 @@ from pathlib import Path
 from .db import StateDB
 from .conductor import Conductor, ProjectConfig
 from .notify import create_notifier
-
-# ── Path discovery ──
-
-def _find_db():
-    cwd = Path.cwd()
-    for p in [cwd / "state.db", cwd / ".framework" / "workflow" / "state.db"]:
-        if p.exists():
-            return p
-    return cwd / "state.db"
-
-
-def _find_workflow():
-    cwd = Path.cwd()
-    for p in [cwd / "architectures" / "dev-test-loop" / "workflow" / "pm-dev-test.yaml"]:
-        if p.exists():
-            return p
-    return None
-
-
-def _find_roles():
-    cwd = Path.cwd()
-    for p in [cwd / "architectures" / "dev-test-loop" / "config" / "roles.yaml"]:
-        if p.exists():
-            return p
-    return None
+from .config.loader import find_state_db, find_workflow_yaml, find_roles_yaml
+from .services.pid_manager import PidManager
 
 
 # ── Conductor instance (global for signal handling) ──
@@ -98,9 +75,9 @@ def cmd_start(args):
     pid_file = Path(args.pid_file) if args.pid_file else None
     discord_webhook = args.discord_webhook
 
-    db_path = _find_db()
-    workflow_path = _find_workflow()
-    roles_path = _find_roles()
+    db_path = find_state_db()
+    workflow_path = find_workflow_yaml()
+    roles_path = find_roles_yaml()
 
     if not workflow_path:
         print("Error: No workflow YAML found.")
@@ -258,8 +235,10 @@ def cmd_status(args):
             # Progress bar
             bar = task.get("bar", "")
             subtasks_info = ""
-            if task.get("total_subtasks", 0) > 0:
-                subtasks_info = f" | Subtasks: {task.get('completed_subtasks',0)}/{task.get('total_subtasks',0)}"
+            if task.get("subtasks_total", 0) > 0:
+                subtasks_info = f" | Subtasks: {task.get('subtasks_done',0)}/{task.get('subtasks_total',0)}"
+            elif task.get("total_steps", 0) > 0:
+                subtasks_info = f" | Steps: {task.get('completed_steps',0)}/{task.get('total_steps',0)}"
 
             print(f"    • {task['task_id']}")
             print(f"      {bar} {step} ({agent}) | {task.get('status','?')}{elapsed}{subtasks_info}")
@@ -381,9 +360,9 @@ def cmd_retry(args):
         print("Usage: multiagent conductor retry <task_id>")
         return 1
 
-    db_path = _find_db()
-    workflow_path = _find_workflow()
-    roles_path = _find_roles()
+    db_path = find_state_db()
+    workflow_path = find_workflow_yaml()
+    roles_path = find_roles_yaml()
 
     if not workflow_path:
         print("Error: No workflow YAML found.")

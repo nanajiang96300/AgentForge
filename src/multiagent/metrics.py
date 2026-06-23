@@ -1,23 +1,19 @@
 """Agent Metrics 分析工具"""
 import sys, csv
 from datetime import datetime
-from pathlib import Path
 from .db import StateDB
-
-def find_state_db(start=None):
-    if start is None: start = Path.cwd()
-    for p in [start] + list(start.parents):
-        for pat in ["**/state.db", ".framework/workflow/state.db"]:
-            m = list(p.glob(pat))
-            if m: return m[0]
-    return start / "state.db"
+from .config.loader import find_state_db
 
 def summary(db):
     s = db.get_metrics_summary()
     print(f"\n📊 Summary: {s['total_calls']} calls, {s['total_input_tokens']:,} in tokens, ${s['total_cost_usd']:.4f}")
 
 def by_agent(db):
-    for a in ["dev","test","pm","conductor","user-agent"]:
+    # Query distinct agents from DB (no hardcoded list)
+    agents = db.conn.execute(
+        "SELECT DISTINCT agent FROM agent_metrics ORDER BY agent"
+    ).fetchall()
+    for (a,) in agents:
         s = db.get_metrics_summary(a)
         if s['total_calls'] > 0:
             print(f"  {a:<12} {s['total_calls']:>4} calls  {s['total_input_tokens']:>10,} in  ${s['total_cost_usd']:>8.4f}")
