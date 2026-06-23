@@ -1,0 +1,35 @@
+workflow:
+  id: "test-linear"
+  version: "1.0"
+  description: "D1: Linear PM→Dev→Test pipeline"
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      timeout: 300
+      output:
+        required: ["root_cause", "task_breakdown", "complexity"]
+      on_success:
+        to_state: "assigned"
+    - id: "dev_fix"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      input:
+        from: "pm_analyze.output"
+        fields: ["root_cause", "task_breakdown"]
+      output:
+        required: ["branch_name", "files_changed"]
+    - id: "test_verify"
+      agent: "test"
+      timeout: 300
+      depends_on: "dev_fix"
+      input:
+        from: "dev_fix.output"
+        fields: ["branch_name", "files_changed"]
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_approved:
+        action: "mark_complete"
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

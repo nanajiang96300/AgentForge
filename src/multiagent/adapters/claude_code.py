@@ -24,13 +24,35 @@ class ClaudeCodeAdapter(AgentAdapter):
         cmd = ["claude", "-p", task_prompt, "--output-format", "json"]
         # Permission mode: auto-accept edits for non-interactive agent subprocess
         cmd.extend(["--permission-mode", "acceptEdits"])
+
+        # Model selection — from agent config or registry
+        model_name = agent_config.get("model", "")
+        if model_name:
+            cmd.extend(["--model", model_name])
+
+        # Soft constraint: SKILL.md
         skill_rel = agent_config.get("skill", "")
         if skill_rel:
             sp = self.project_root / skill_rel
-            if sp.exists(): cmd.extend(["--append-system-prompt-file", str(sp)])
-        _, disallowed = self.get_tool_restriction_flags(agent_config.get("permissions", {}))
-        if disallowed: cmd.extend(["--disallowedTools", ",".join(disallowed)])
-        cmd.append("--bare"); cmd.extend(["--add-dir", str(self.project_root)])
+            if sp.exists():
+                cmd.extend(["--append-system-prompt-file", str(sp)])
+
+        # Memory directory
+        memory_rel = agent_config.get("memory", "")
+        if memory_rel:
+            mp = self.project_root / memory_rel
+            mp.mkdir(parents=True, exist_ok=True)
+
+        # Hard constraint: tool restrictions
+        allowed, disallowed = self.get_tool_restriction_flags(
+            agent_config.get("permissions", {}))
+        if allowed:
+            cmd.extend(["--allowedTools", ",".join(allowed)])
+        if disallowed:
+            cmd.extend(["--disallowedTools", ",".join(disallowed)])
+
+        cmd.append("--bare")
+        cmd.extend(["--add-dir", str(self.project_root)])
         return cmd
 
     def parse_output(self, stdout, stderr):
@@ -53,4 +75,20 @@ class ClaudeCodeAdapter(AgentAdapter):
         return result, raw
 
     def _paths_to_tool_patterns(self, deny_paths, write_paths):
-        return [], [f"Write({p.rstrip('/')}/*)" for p in deny_paths] + [f"Edit({p.rstrip('/')}/*)" for p in deny_paths]
+        # Allowed tools: base read tools + write access to permitted paths
+        base_tools = ["Read", "Grep", "Glob", "Bash", "WebSearch", "WebFetch",
+                      "Task", "TaskResult", "EnterPlanMode", "ExitPlanMode",
+                      "Skill", "AskUserQuestion"]
+        allowed = list(base_tools)
+        for p in write_paths:
+            p_clean = p.rstrip("/")
+            allowed.append(f"Write({p_clean}/*)")
+            allowed.append(f"Edit({p_clean}/*)")
+
+        # Disallowed: write/edit on denied paths
+        disallowed = []
+        for p in deny_paths:
+            p_clean = p.rstrip("/")
+            disallowed.append(f"Write({p_clean}/*)")
+            disallowed.append(f"Edit({p_clean}/*)")
+        return allowed, disallowed

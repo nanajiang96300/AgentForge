@@ -1,0 +1,46 @@
+workflow:
+  id: "test-reviewer"
+  version: "1.0"
+  description: "D3: PM → Dev → Reviewer → Test (4-step with code review)"
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      timeout: 300
+      output:
+        required: ["root_cause", "task_breakdown", "complexity"]
+    - id: "dev_implement"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      input:
+        from: "pm_analyze.output"
+        fields: ["root_cause", "task_breakdown"]
+      output:
+        required: ["branch_name", "files_changed", "commit_hash"]
+    - id: "reviewer_check"
+      agent: "reviewer"
+      timeout: 300
+      depends_on: "dev_implement"
+      input:
+        from: "dev_implement.output"
+        fields: ["branch_name", "files_changed"]
+      output:
+        required: ["verdict", "review_summary"]
+      on_verdict_rejected:
+        next: "dev_implement"
+      on_verdict_approved:
+        action: "mark_complete"
+    - id: "test_verify"
+      agent: "test"
+      timeout: 300
+      depends_on: "reviewer_check"
+      input:
+        from: "reviewer_check.output"
+        fields: ["verdict"]
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_approved:
+        action: "mark_complete"
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

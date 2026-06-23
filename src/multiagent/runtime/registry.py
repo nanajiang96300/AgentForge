@@ -18,6 +18,7 @@ class AgentConfig:
     name: str
     description: str = ""
     model: str = ""
+    personality: str = ""  # Behavioral style hint
     permissions: dict = field(default_factory=lambda: {"write": [], "read": [], "deny": []})
     skill: str = ""       # Path to SKILL.md
     memory: str = ""      # Memory directory
@@ -77,6 +78,7 @@ class AgentRegistry:
                 name=name,
                 description=cfg.get("description", ""),
                 model=cfg.get("model", ""),
+                personality=cfg.get("personality", ""),
                 permissions=cfg.get("permissions", {"write": [], "read": [], "deny": []}),
                 skill=cfg.get("skill", ""),
                 memory=cfg.get("memory", ""),

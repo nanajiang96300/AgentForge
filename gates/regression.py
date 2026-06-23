@@ -35,6 +35,8 @@ MODULES = [
     ("Graph Engine: DAG building + serialization", "test_graph_engine.py"),
     ("Agent Registry: CRUD + YAML + workflow steps", "test_agent_registry.py"),
     ("PM Search: keyword + status filter", "test_pm_search.py"),
+    ("Workflow CLI: templates + validation", "test_workflow_cli.py"),
+    ("Topology: DAG structures validation", "test_topology.py"),
 ]
 
 def run_module(path, timeout=30):

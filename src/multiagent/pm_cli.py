@@ -296,6 +296,18 @@ def main():
         _cmd_agent(sys.argv[2:])
         return
 
+    # Dispatch: multiagent role → role management
+    if sys.argv[1] == "role":
+        from .role_cli import main as role_main
+        role_main()
+        return
+
+    # Dispatch: multiagent workflow → workflow management
+    if sys.argv[1] == "workflow":
+        from .workflow_cli import main as wf_main
+        wf_main()
+        return
+
     # Dispatch: multiagent checkpoint → checkpoint management
     if sys.argv[1] == "checkpoint":
         _cmd_checkpoint(sys.argv[2:])

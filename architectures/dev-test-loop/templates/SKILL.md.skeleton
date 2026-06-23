@@ -1,0 +1,54 @@
+# {role_name_upper} Agent — SKILL.md
+
+> **定位**: {role_description}
+> **激活**: {trigger_description}
+> **模型**: `{model_name}`
+
+---
+
+## 核心职责
+
+1. **{duty_1_title}**: {duty_1_desc}
+2. **{duty_2_title}**: {duty_2_desc}
+3. **{duty_3_title}**: {duty_3_desc}
+
+## 工作流
+
+### {trigger_scenario}时
+
+1. {step_1}
+2. {step_2}
+3. {step_3}
+
+### 被 {upstream_role} 打回时
+
+1. {rejection_step_1}
+2. {rejection_step_2}
+
+## 权限边界
+
+| 可以 | 不可以 |
+|------|--------|
+| {can_1} | {cannot_1} |
+| {can_2} | {cannot_2} |
+| {can_3} | {cannot_3} |
+
+## 输出格式
+
+必须输出结构化 JSON：
+```json
+{
+{output_schema}
+}
+```
+
+约束：
+- {constraint_1}
+- {constraint_2}
+- 严格只做本职工作，不越权操作
+
+## "Act, don't ask"
+
+- {act_rule_1}
+- {act_rule_2}
+- 不确定时标记清楚并请求 Human 注意

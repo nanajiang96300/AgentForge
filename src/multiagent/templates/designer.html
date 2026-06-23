@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Designer{% endblock %}
+
+{% block content %}
+
+<div class="section">
+  <h2>🎨 Workflow Designer</h2>
+
+  <!-- Agent Buttons -->
+  <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;" id="agent-btns"></div>
+
+  <!-- Custom Agent Creation -->
+  <details style="margin-bottom:16px;">
+    <summary>➕ Create Custom Agent Role</summary>
+    <div class="form-grid" style="margin-top:8px;">
+      <div>
+        <label>Clone Template</label>
+        <select id="newAgentTemplate" onchange="applyTemplate()">
+          <option value="">— Start from scratch —</option>
+        </select>
+      </div>
+      <div>
+        <label>Agent Name *</label>
+        <input type="text" id="newAgentName" placeholder="e.g. reviewer">
+      </div>
+      <div>
+        <label>Description</label>
+        <input type="text" id="newAgentDesc" placeholder="What this agent does">
+      </div>
+      <div>
+        <label>Model</label>
+        <input type="text" id="newAgentModel" placeholder="deepseek/deepseek-chat">
+      </div>
+      <div>
+        <label>Timeout (s)</label>
+        <input type="number" id="newAgentTimeout" value="600">
+      </div>
+      <div>
+        <label>Output Required (comma-separated)</label>
+        <input type="text" id="newAgentOutput" placeholder="verdict, summary">
+      </div>
+      <div>
+        <label>Write Paths (comma-separated)</label>
+        <input type="text" id="newAgentWrite" placeholder="src/">
+      </div>
+      <div>
+        <label>Read Paths (comma-separated)</label>
+        <input type="text" id="newAgentRead" placeholder="src/, tests/">
+      </div>
+      <div>
+        <label>Deny Paths (comma-separated)</label>
+        <input type="text" id="newAgentDeny" placeholder="tests/">
+      </div>
+      <div>
+        <label>Skill Path</label>
+        <input type="text" id="newAgentSkill" placeholder="architectures/.../SKILL.md">
+      </div>
+      <div class="full-width">
+        <button onclick="addCustomAgent()" class="btn btn-green">+ Create Role</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="designer-layout">
+    <!-- Canvas -->
+    <div class="canvas-area">
+      <svg id="canvas" width="100%" height="420" style="display:block;">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#58a6ff"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <!-- Sidebar -->
+    <div>
+      <div class="sidebar-panel">
+        <h3>🔗 Connect Nodes</h3>
+        <select id="efrom" style="width:100%;padding:6px;margin-bottom:4px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;">
+          <option>— From —</option>
+        </select>
+        <select id="eto" style="width:100%;padding:6px;margin-bottom:4px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;">
+          <option>— To —</option>
+        </select>
+        <select id="etype" style="width:100%;padding:6px;margin-bottom:8px;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:4px;">
+          <option value="depends_on">depends_on (hard dependency)</option>
+          <option value="verdict_rejected">verdict_rejected (fail → back)</option>
+          <option value="verdict_approved">verdict_approved (pass → forward)</option>
+        </select>
+        <button onclick="addEdgeFromUI()" class="btn btn-blue btn-block">Connect</button>
+      </div>
+
+      <div class="sidebar-panel" style="font-size:0.75em;color:var(--muted);">
+        <strong>Edge Legend:</strong><br>
+        <span style="color:#58a6ff;">─── depends_on</span><br>
+        <span style="color:#f85149;">- - rejected</span><br>
+        <span style="color:#3fb950;">··· approved</span><br>
+        <span style="font-size:0.7em;">Double-click node to remove</span>
+      </div>
+
+      <button onclick="exportYAML()" class="btn btn-green btn-block" style="margin-bottom:8px;">📋 Export YAML</button>
+      <pre id="yaml-out" class="yaml-out"></pre>
+
+      <div id="validation-warnings" style="margin-top:8px;font-size:0.8em;"></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  AGENTS = {{ agents_json | safe }};
+  TEMPLATES = {{ templates_json | safe }};
+</script>
+<script src="/static/designer.js"></script>
+<script>
+// Add agent buttons on load
+document.addEventListener('DOMContentLoaded', function() {
+  var btns = document.getElementById('agent-btns');
+  AGENTS.forEach(function(a) {
+    var b = document.createElement('button');
+    b.textContent = '+' + a.name.toUpperCase();
+    b.className = 'btn btn-purple';
+    b.title = a.description;
+    b.style.cssText = 'margin:4px;';
+    b.onclick = function() { addNode(a.name); };
+    btns.appendChild(b);
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,41 @@
+workflow:
+  id: "test-diamond"
+  version: "1.0"
+  description: "D2: PM → Dev1 + Dev2 (parallel) → Test"
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      timeout: 300
+      output:
+        required: ["root_cause", "task_breakdown"]
+    - id: "dev_backend"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      input:
+        from: "pm_analyze.output"
+        fields: ["root_cause", "task_breakdown"]
+      output:
+        required: ["branch_name", "files_changed"]
+    - id: "dev_frontend"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      input:
+        from: "pm_analyze.output"
+        fields: ["root_cause", "task_breakdown"]
+      output:
+        required: ["branch_name", "files_changed"]
+    - id: "test_integration"
+      agent: "test"
+      timeout: 300
+      depends_on:
+        - "dev_backend"
+        - "dev_frontend"
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_approved:
+        action: "mark_complete"
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

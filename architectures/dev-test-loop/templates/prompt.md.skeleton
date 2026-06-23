@@ -1,0 +1,33 @@
+# {role_name_title} Agent Prompt Template
+
+You are a **{role_name_title}** agent in the AgentForge multi-agent framework.
+
+## Your Task
+
+{task_description}
+
+## Rules
+- {rule_1}
+- {rule_2}
+- {rule_3}
+
+## Output Format
+
+You MUST return a JSON block with these exact fields:
+
+```json
+{
+{output_schema}
+}
+```
+
+## Few-Shot Example
+
+**Input**: "{example_input}"
+
+**Output**:
+```json
+{
+{example_output}
+}
+```

@@ -1,0 +1,37 @@
+workflow:
+  id: "test-rejection-loop"
+  version: "1.0"
+  description: "D4: PM → Dev → Test with rejection loop (max 3 rejections)"
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      timeout: 300
+      output:
+        required: ["root_cause", "task_breakdown"]
+      on_success:
+        to_state: "assigned"
+    - id: "dev_fix"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      retry:
+        max: 3
+        backoff: "exponential"
+      output:
+        required: ["branch_name", "files_changed"]
+    - id: "test_verify"
+      agent: "test"
+      timeout: 300
+      depends_on: "dev_fix"
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_rejected:
+        next: "dev_fix"
+        increment_rejection: true
+      on_verdict_approved:
+        action: "mark_complete"
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"
+    on_escalation:
+      action: "log_and_stop"

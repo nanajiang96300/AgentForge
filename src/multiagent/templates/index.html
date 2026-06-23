@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- Stat Cards -->
+<div class="grid">
+  <div class="stat-card">
+    <div class="label">Pending</div>
+    <div class="value blue">{{ pending_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Running</div>
+    <div class="value orange">{{ running_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Completed</div>
+    <div class="value green">{{ completed_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Escalated</div>
+    <div class="value red">{{ escalated_count }}</div>
+  </div>
+</div>
+
+<!-- Token Summary -->
+{% if metrics %}
+<div class="grid">
+  <div class="stat-card">
+    <div class="label">Total Calls</div>
+    <div class="value">{{ metrics.total_calls }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Input Tokens</div>
+    <div class="value">{{ metrics.input_tokens_fmt }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Output Tokens</div>
+    <div class="value">{{ metrics.output_tokens_fmt }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Cost</div>
+    <div class="value green">${{ "%.2f"|format(metrics.total_cost_usd) }}</div>
+  </div>
+</div>
+{% endif %}
+
+<!-- 7-Day Trend Charts -->
+<div class="section">
+  <h2>📈 7-Day Trends</h2>
+  <div class="grid grid-2">
+    <div class="chart-container" style="height:280px;">
+      <h3>Token Usage</h3>
+      <div style="height:230px;position:relative;"><canvas id="tokenChart"></canvas></div>
+    </div>
+    <div class="chart-container" style="height:280px;">
+      <h3>Task Pass Rate</h3>
+      <div style="height:230px;position:relative;"><canvas id="passRateChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Workflow DAG -->
+<div class="section">
+  <h2>🔀 Workflow DAG</h2>
+  <div id="mermaid-container" class="chart-container" style="min-height:120px;text-align:center;">
+    <span class="muted">Loading workflow graph...</span>
+  </div>
+</div>
+
+<!-- In-Flight Tasks -->
+{% if in_flight %}
+<div class="section">
+  <h2>🔄 In-Flight Tasks</h2>
+  <table>
+    <tr><th>Task</th><th>Pipeline</th><th>Progress</th><th>Tokens</th><th>Cost</th></tr>
+    {% for t in in_flight %}
+    <tr>
+      <td><code>{{ t.id[:14] }}</code></td>
+      <td>{{ t.pipeline_html | safe }}</td>
+      <td>{{ t.progress_html | safe }}</td>
+      <td>{{ t.tokens_in_fmt }} / {{ t.tokens_out_fmt }}</td>
+      <td>${{ "%.4f"|format(t.cost) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<!-- All Tasks -->
+<div class="section">
+  <h2>📋 All Tasks</h2>
+  <div class="filter-bar">
+    <input type="text" id="searchInput" placeholder="Search task ID..." autocomplete="off">
+    <select id="statusFilter">
+      <option value="">All Statuses</option>
+      <option value="pending">Pending</option>
+      <option value="running">Running</option>
+      <option value="assigned">Assigned</option>
+      <option value="completed">Completed</option>
+      <option value="failed">Failed</option>
+      <option value="escalated">Escalated</option>
+    </select>
+  </div>
+  <table>
+    <tr><th>ID</th><th>Type</th><th>Status</th><th>Pipeline</th><th>Created</th></tr>
+    {% for t in tasks %}
+    <tr class="task-row" data-status="{{ t.status }}" data-id="{{ t.id }}">
+      <td><code>{{ t.id[:14] }}</code></td>
+      <td>{{ t.type }}</td>
+      <td><span class="badge {{ t.status }}">{{ t.status }}</span></td>
+      <td>{{ t.pipeline_html | safe }}</td>
+      <td>{{ t.created_at[:19] if t.created_at else "-" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}
