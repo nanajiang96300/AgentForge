@@ -19,16 +19,27 @@ from .config.loader import find_state_db, find_roles_yaml
 
 
 def _wire_hooks(orchestrator, db=None):
-    """Register notification hooks for automatic Discord progress updates."""
+    """Register notification hooks. Language: env AGENTFORGE_LANG=zh|en, default zh."""
     try:
-        from .notify import create_notifier, NotifierStepHook
+        import os
+        from .notify import create_notifier, NotifierStepHook, set_language, get_language
         import logging
         _log = logging.getLogger("multiagent.hooks")
+
+        lang = os.environ.get("AGENTFORGE_LANG", "")
+        if not lang:
+            try:
+                from .notify import _load_claudeclaw_config
+                lang = _load_claudeclaw_config().get("language", "")
+            except: pass
+        if lang:
+            set_language(lang)
+
         notifiers = create_notifier()
         if notifiers:
             hook = NotifierStepHook(notifiers, db=db)
             orchestrator.register_hook(hook)
-            _log.info("Hooks wired: %d notifier(s)", len(notifiers))
+            _log.info("Hooks wired: %d notifier(s), lang=%s", len(notifiers), get_language())
     except Exception:
         pass
 

@@ -1,5 +1,7 @@
 """
 Discord Webhook 通知模块 — 零 Token 消耗的实时推送。
+
+支持中英文双语，默认中文。开源社区可通过 set_language('en') 切换。
 """
 
 import json
@@ -9,6 +11,118 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 _log = logging.getLogger("multiagent.notify")
+
+# ── i18n ──────────────────────────────────────────────────────────────
+_LANG = "zh"
+
+_I18N = {
+    "zh": {
+        "started": "▶️ 步骤开始",
+        "completed": "✅ 步骤完成",
+        "failed": "❌ 步骤失败",
+        "escalated": "🚨 需人工介入",
+        "rejected": "🔄 测试不通过，开发修复中",
+        "field.task": "任务",
+        "field.step": "步骤",
+        "field.type": "类型",
+        "field.project": "项目",
+        "field.status": "状态",
+        "field.requirements": "需求描述",
+        "field.root_cause": "根因分析",
+        "field.complexity": "复杂度",
+        "field.subtasks": "子任务",
+        "field.branch": "分支",
+        "field.commit": "提交",
+        "field.files": "修改文件",
+        "field.verdict": "判定",
+        "field.summary": "测试摘要",
+        "field.error": "错误",
+        "field.rejections": "打回次数",
+        "field.rejected_by": "打回步骤",
+        "field.rejection": "打回",
+        "field.reason": "原因",
+        "field.next": "下一步",
+        "field.action": "处理方式",
+        "field.reason_short": "原因",
+        "rejection.next": "开发 Agent 将重新实现并通过测试验证（第 {count}/3 次）",
+        "escalation.action": "`multiagent conductor retry <task_id>` 重试\n`multiagent conductor reject <task_id>` 放弃",
+        "status.running": "运行中",
+        "status.completed": "已完成",
+        "status.failed": "失败",
+        "status.escalated": "已升级",
+        "status.rejected": "已打回",
+        "status.crashed": "崩溃",
+        "status.timed_out": "超时",
+        "footer": "AgentForge",
+    },
+    "en": {
+        "started": "▶️ Step Started",
+        "completed": "✅ Step Completed",
+        "failed": "❌ Step Failed",
+        "escalated": "🚨 Escalation — Human Action Required",
+        "rejected": "🔄 Rejected — Test found issues, Dev fixing",
+        "field.task": "Task",
+        "field.step": "Step",
+        "field.type": "Type",
+        "field.project": "Project",
+        "field.status": "Status",
+        "field.requirements": "Requirements",
+        "field.root_cause": "Root Cause",
+        "field.complexity": "Complexity",
+        "field.subtasks": "Subtasks",
+        "field.branch": "Branch",
+        "field.commit": "Commit",
+        "field.files": "Files Changed",
+        "field.verdict": "Verdict",
+        "field.summary": "Test Summary",
+        "field.error": "Error",
+        "field.rejections": "Rejections",
+        "field.rejected_by": "Rejected by",
+        "field.rejection": "Rejection",
+        "field.reason": "Reason",
+        "field.next": "Next Action",
+        "field.action": "Action",
+        "field.reason_short": "Reason",
+        "rejection.next": "Dev agent will re-implement and Test will re-verify (attempt {count}/3)",
+        "escalation.action": "`multiagent conductor retry <task_id>` to retry\n`multiagent conductor reject <task_id>` to abandon",
+        "status.running": "running",
+        "status.completed": "completed",
+        "status.failed": "failed",
+        "status.escalated": "escalated",
+        "status.rejected": "rejected",
+        "status.crashed": "crashed",
+        "status.timed_out": "timed out",
+        "footer": "AgentForge",
+    },
+}
+
+
+def set_language(lang: str) -> None:
+    """切换通知语言。'zh'=中文，'en'=English。"""
+    global _LANG
+    if lang in _I18N:
+        _LANG = lang
+
+
+def get_language() -> str:
+    return _LANG
+
+
+def t(key: str, **kwargs) -> str:
+    """获取翻译文本，支持格式化参数。"""
+    text = _I18N.get(_LANG, _I18N["zh"]).get(key, key)
+    if kwargs:
+        return text.format(**kwargs)
+    return text
+
+
+def _status_label(status_str: str) -> str:
+    """将内部状态值翻译为显示文本。"""
+    key = f"status.{status_str}"
+    return _I18N.get(_LANG, _I18N["zh"]).get(key, status_str)
+
+
+# ── Colors ────────────────────────────────────────────────────────────
 
 COLOR_STARTED = 0x3498DB
 COLOR_COMPLETED = 0x2ECC71
@@ -22,49 +136,63 @@ EVENT_COLORS = {
     "rejected": COLOR_REJECTED,
 }
 
-EVENT_LABELS = {
-    "started": "▶️ Step Started", "completed": "✅ Step Completed",
-    "failed": "❌ Step Failed", "escalated": "🚨 Escalation",
-    "rejected": "🔄 Rejected — Test found issues",
-}
+EVENT_LABELS = {k: v for k, v in _I18N["zh"].items() if k in EVENT_COLORS}
+
+# ── Notifier Registry ─────────────────────────────────────────────────
 
 _notifier_registry: dict[str, type] = {}
 
+
 def register_notifier(name, factory):
     _notifier_registry[name] = factory
+
 
 def get_notifier(name, **kwargs):
     factory = _notifier_registry.get(name)
     return factory(**kwargs) if factory else None
 
+
 def list_notifiers():
     return list(_notifier_registry.keys())
+
 
 register_notifier("discord-webhook", lambda **kw: DiscordNotifier(kw.get("webhook_url", "")))
 register_notifier("discord-channel", lambda **kw: DiscordChannelNotifier(
     kw.get("bot_token", ""), kw.get("channel_id", "")))
 
 
+# ── Embed Builder ─────────────────────────────────────────────────────
+
 def _build_embed(event, task_id, project_name, task_dict):
     color = EVENT_COLORS.get(event, COLOR_STARTED)
-    title = EVENT_LABELS.get(event, event.title())
+    # Reload labels from current language
+    labels = _I18N.get(_LANG, _I18N["zh"])
+    title = labels.get(event, event.title())
+
     custom_fields = task_dict.get("_embed_fields", []) if isinstance(task_dict, dict) else []
-    fields = list(custom_fields) if custom_fields else [
-        {"name": "Task", "value": f"`{task_id}`", "inline": True},
-        {"name": "Project", "value": project_name, "inline": True},
-        {"name": "Type", "value": task_dict.get("type", "?"), "inline": True},
-    ]
+    if custom_fields:
+        fields = list(custom_fields)
+    else:
+        fields = [
+            {"name": t("field.task"), "value": f"`{task_id}`", "inline": True},
+            {"name": t("field.project"), "value": project_name, "inline": True},
+            {"name": t("field.type"), "value": task_dict.get("type", "?"), "inline": True},
+        ]
+
     if isinstance(task_dict, dict):
         if task_dict.get("error"):
-            fields.append({"name": "Error", "value": str(task_dict["error"])[:1024], "inline": False})
+            fields.append({"name": t("field.error"), "value": str(task_dict["error"])[:1024], "inline": False})
         rc = task_dict.get("rejection_count", 0)
         if rc > 0:
-            fields.append({"name": "Rejections", "value": str(rc), "inline": True})
+            fields.append({"name": t("field.rejections"), "value": str(rc), "inline": True})
+
     return {
         "title": title, "color": color, "fields": fields,
-        "footer": {"text": f"AgentForge • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"},
+        "footer": {"text": f"{t('footer')} • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"},
     }
 
+
+# ── Notifiers ─────────────────────────────────────────────────────────
 
 class DiscordNotifier:
     def __init__(self, webhook_url, username="AgentForge"):
@@ -110,6 +238,8 @@ class DiscordChannelNotifier:
             _log.error("Discord channel message failed: %s", e)
 
 
+# ── Config Loader ─────────────────────────────────────────────────────
+
 def _load_claudeclaw_config():
     try:
         import json as _j
@@ -136,7 +266,10 @@ def _load_claudeclaw_config():
 
 
 def create_notifier(webhook_url=None, discord_webhook_url=None,
-                    discord_channel_id=None, bot_token=None):
+                    discord_channel_id=None, bot_token=None, language=None):
+    """工厂函数。language='zh'|'en' 设置通知语言。"""
+    if language:
+        set_language(language)
     notifiers = []
     url = webhook_url or discord_webhook_url
     if url:
@@ -159,10 +292,10 @@ def create_notifier(webhook_url=None, discord_webhook_url=None,
     return notifiers
 
 
-# ── Rich StepHook adapter ──
+# ── Rich StepHook Adapter ─────────────────────────────────────────────
 
 class NotifierStepHook:
-    """Adapts notifiers to StepHook with rich DB-backed embeds."""
+    """将通知器适配为 StepHook，自动从 DB 读取上下文生成富文本 embed。"""
 
     def __init__(self, notifiers, db=None, project_name="AgentForge"):
         self._notifiers = notifiers
@@ -204,12 +337,12 @@ class NotifierStepHook:
     def before_step(self, task_id, step_id):
         tc = self._task_ctx(task_id)
         fields = [
-            {"name": "Task", "value": f"`{task_id}`", "inline": True},
-            {"name": "Step", "value": step_id, "inline": True},
-            {"name": "Type", "value": tc.get("task_type", "?"), "inline": True},
+            {"name": t("field.task"), "value": f"`{task_id}`", "inline": True},
+            {"name": t("field.step"), "value": step_id, "inline": True},
+            {"name": t("field.type"), "value": tc.get("task_type", "?"), "inline": True},
         ]
         if tc.get("requirements"):
-            fields.append({"name": "Requirements", "value": tc["requirements"][:200], "inline": False})
+            fields.append({"name": t("field.requirements"), "value": tc["requirements"][:200], "inline": False})
         for n in self._notifiers:
             try: n("started", task_id, self._project, {"status": "running", "type": f"step:{step_id}", "_embed_fields": fields})
             except: pass
@@ -220,34 +353,34 @@ class NotifierStepHook:
         status_str = str(status.value) if hasattr(status, "value") else str(status or "unknown")
 
         fields = [
-            {"name": "Task", "value": f"`{task_id}`", "inline": True},
-            {"name": "Step", "value": step_id, "inline": True},
-            {"name": "Status", "value": status_str, "inline": True},
+            {"name": t("field.task"), "value": f"`{task_id}`", "inline": True},
+            {"name": t("field.step"), "value": step_id, "inline": True},
+            {"name": t("field.status"), "value": _status_label(status_str), "inline": True},
         ]
-        # Rich per-agent fields
+        # Rich per-agent output
         if "pm_analyze" in step_id:
             if output.get("root_cause"):
-                fields.append({"name": "Root Cause", "value": str(output["root_cause"])[:200], "inline": False})
+                fields.append({"name": t("field.root_cause"), "value": str(output["root_cause"])[:200], "inline": False})
             if output.get("complexity"):
-                fields.append({"name": "Complexity", "value": str(output["complexity"]), "inline": True})
+                fields.append({"name": t("field.complexity"), "value": str(output["complexity"]), "inline": True})
             bd = output.get("task_breakdown", [])
             if bd:
-                fields.append({"name": f"Subtasks ({len(bd)})", "value": "\n".join(f"• {t}" for t in bd[:5])[:300], "inline": False})
+                fields.append({"name": t("field.subtasks") + f" ({len(bd)})", "value": "\n".join(f"• {x}" for x in bd[:5])[:300], "inline": False})
         elif "dev" in step_id:
             if output.get("branch_name"):
-                fields.append({"name": "Branch", "value": str(output["branch_name"]), "inline": True})
+                fields.append({"name": t("field.branch"), "value": str(output["branch_name"]), "inline": True})
             if output.get("commit_hash"):
-                fields.append({"name": "Commit", "value": f"`{str(output['commit_hash'])[:8]}`", "inline": True})
+                fields.append({"name": t("field.commit"), "value": f"`{str(output['commit_hash'])[:8]}`", "inline": True})
             files = output.get("files_changed", [])
             if files:
-                fields.append({"name": "Files", "value": "\n".join(f"`{f}`" for f in files[:5]), "inline": False})
+                fields.append({"name": t("field.files"), "value": "\n".join(f"`{f}`" for f in files[:5]), "inline": False})
         elif "test" in step_id:
             verdict = str(output.get("verdict", "?")).upper()
-            fields.append({"name": "Verdict", "value": verdict, "inline": True})
+            fields.append({"name": t("field.verdict"), "value": verdict, "inline": True})
             if output.get("test_summary"):
-                fields.append({"name": "Summary", "value": str(output["test_summary"])[:300], "inline": False})
+                fields.append({"name": t("field.summary"), "value": str(output["test_summary"])[:300], "inline": False})
         if hasattr(result, "error") and result.error:
-            fields.append({"name": "Error", "value": str(result.error)[:500], "inline": False})
+            fields.append({"name": t("field.error"), "value": str(result.error)[:500], "inline": False})
 
         for n in self._notifiers:
             try:
@@ -259,11 +392,11 @@ class NotifierStepHook:
         test_out = self._last_output(task_id, step_id)
         reason = test_out.get("reason", test_out.get("test_summary", "Issues found"))[:300]
         fields = [
-            {"name": "Task", "value": f"`{task_id}`", "inline": True},
-            {"name": "Rejected by", "value": step_id, "inline": True},
-            {"name": "Rejection", "value": f"{count}/3", "inline": True},
-            {"name": "Reason", "value": reason, "inline": False},
-            {"name": "Next", "value": f"Dev will re-implement (attempt {count+1}/3)", "inline": False},
+            {"name": t("field.task"), "value": f"`{task_id}`", "inline": True},
+            {"name": t("field.rejected_by"), "value": step_id, "inline": True},
+            {"name": t("field.rejection"), "value": f"{count}/3", "inline": True},
+            {"name": t("field.reason"), "value": reason, "inline": False},
+            {"name": t("field.next"), "value": t("rejection.next", count=count + 1), "inline": False},
         ]
         for n in self._notifiers:
             try: n("rejected", task_id, self._project, {"status": "rejected", "type": f"step:{step_id}", "rejection_count": count, "_embed_fields": fields})
@@ -271,10 +404,10 @@ class NotifierStepHook:
 
     def on_escalation(self, task_id, step_id, reason):
         fields = [
-            {"name": "Task", "value": f"`{task_id}`", "inline": True},
-            {"name": "Step", "value": step_id, "inline": True},
-            {"name": "Reason", "value": str(reason)[:500], "inline": False},
-            {"name": "Action", "value": "`multiagent conductor retry <task_id>` or `reject`", "inline": False},
+            {"name": t("field.task"), "value": f"`{task_id}`", "inline": True},
+            {"name": t("field.step"), "value": step_id, "inline": True},
+            {"name": t("field.reason"), "value": str(reason)[:500], "inline": False},
+            {"name": t("field.action"), "value": t("escalation.action"), "inline": False},
         ]
         for n in self._notifiers:
             try: n("escalated", task_id, self._project, {"status": "escalated", "type": f"step:{step_id}", "error": str(reason), "_embed_fields": fields})
