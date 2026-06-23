@@ -15,6 +15,52 @@ from .db import StateDB, Task, now_iso
 from .config.loader import find_state_db, find_workflow_yaml
 
 
+def _cmd_checkpoint(argv):
+    """Checkpoint management: save, list, restore."""
+    from .services.checkpoint import CheckpointManager
+    db_path = find_state_db()
+    db = StateDB(db_path)
+    db.connect()
+
+    try:
+        cm = CheckpointManager(db)
+        if not argv:
+            print("Usage: multiagent checkpoint <save|list|restore|delete> [task_id|checkpoint_id]")
+            return
+
+        cmd = argv[0]
+        if cmd == "save" and len(argv) > 1:
+            cid = cm.save(argv[1], label=argv[2] if len(argv) > 2 else "")
+            print(f"Checkpoint saved: {cid}")
+        elif cmd == "list":
+            task_id = argv[1] if len(argv) > 1 else None
+            checkpoints = cm.list_checkpoints(task_id)
+            if not checkpoints:
+                print("No checkpoints found.")
+            else:
+                print(f"\nCheckpoints ({len(checkpoints)}):")
+                for c in checkpoints:
+                    print(f"  {c['checkpoint_id']}")
+                    print(f"    Task: {c['task_id']} | Status: {c['task_status']} | Label: {c['label']}")
+        elif cmd == "restore" and len(argv) > 1:
+            data = cm.restore(argv[1])
+            if data:
+                print(f"Checkpoint: {data['checkpoint_id']}")
+                print(f"  Task: {data['task_id']} (status={data['task_status']})")
+                print(f"  Steps: {len(data['steps'])}")
+                for s in data["steps"]:
+                    print(f"    {s['step_id']}: {s['status']}")
+            else:
+                print(f"Checkpoint not found: {argv[1]}")
+        elif cmd == "delete" and len(argv) > 1:
+            if cm.delete(argv[1]):
+                print(f"Deleted: {argv[1]}")
+        else:
+            print("Usage: multiagent checkpoint <save <task_id>|list|restore <id>|delete <id>>")
+    finally:
+        db.close()
+
+
 def _cmd_agent(argv):
     """Agent registry management."""
     from .runtime.registry import AgentRegistry
@@ -248,6 +294,11 @@ def main():
     # Dispatch: multiagent agent → agent registry
     if sys.argv[1] == "agent":
         _cmd_agent(sys.argv[2:])
+        return
+
+    # Dispatch: multiagent checkpoint → checkpoint management
+    if sys.argv[1] == "checkpoint":
+        _cmd_checkpoint(sys.argv[2:])
         return
 
     # Support both: multiagent pm <cmd>  and  multiagent <cmd>
