@@ -15,6 +15,50 @@ from .db import StateDB, Task, now_iso
 from .config.loader import find_state_db, find_workflow_yaml
 
 
+def _cmd_agent(argv):
+    """Agent registry management."""
+    from .runtime.registry import AgentRegistry
+
+    if not argv:
+        print("Usage: multiagent agent <list|show <name>>")
+        return
+
+    cmd = argv[0]
+    if cmd == "list":
+        agents = AgentRegistry.list_all()
+        print(f"\nRegistered Agents ({len(agents)}):")
+        print(f"{'Name':<16} {'Model':<24} {'Timeout':<8} Description")
+        print("-" * 80)
+        for a in agents:
+            print(f"{a.name:<16} {a.model:<24} {a.timeout:<8} {a.description[:50]}")
+        print()
+    elif cmd == "show" and len(argv) > 1:
+        a = AgentRegistry.get(argv[1])
+        if not a:
+            print(f"Agent not found: {argv[1]}")
+            return
+        print(f"\nAgent: {a.name}")
+        print(f"  Description: {a.description}")
+        print(f"  Model: {a.model}")
+        print(f"  Timeout: {a.timeout}s")
+        print(f"  Session: {a.session}")
+        print(f"  Skill: {a.skill}")
+        print(f"  Memory: {a.memory}")
+        print(f"  Runtime: {a.runtime or 'default'}")
+        print(f"  Output Required: {a.output_required}")
+        print(f"  Permissions:")
+        print(f"    Write: {a.permissions.get('write', [])}")
+        print(f"    Read:  {a.permissions.get('read', [])}")
+        print(f"    Deny:  {a.permissions.get('deny', [])}")
+        print()
+    elif cmd == "register" and len(argv) > 1:
+        # Register from YAML file
+        count = AgentRegistry.load_from_yaml(argv[1])
+        print(f"Registered {count} agents from {argv[1]}")
+    else:
+        print("Usage: multiagent agent <list|show <name>|register <yaml>>")
+
+
 def _cmd_dashboard(argv):
     """启动 Web Dashboard"""
     port = 5001
@@ -199,6 +243,11 @@ def main():
     # Dispatch: multiagent dashboard → dashboard server
     if sys.argv[1] == "dashboard":
         _cmd_dashboard(sys.argv[2:])
+        return
+
+    # Dispatch: multiagent agent → agent registry
+    if sys.argv[1] == "agent":
+        _cmd_agent(sys.argv[2:])
         return
 
     # Support both: multiagent pm <cmd>  and  multiagent <cmd>
