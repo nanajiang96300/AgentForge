@@ -75,11 +75,23 @@ def submit_issue_as_task(issue: dict, db, workflow_id: str = "pm-dev-test-loop")
     import uuid
     from .db import Task, now_iso
 
-    # Determine task type from labels
-    issue_type = "feature"
+    # Map GitHub labels to AgentForge task types
+    _LABEL_TYPE_MAP = {
+        "bug": "bug",
+        "fix": "bug",
+        "debug": "debug",
+        "feature": "feature",
+        "enhancement": "enhancement",
+        "docs": "docs",
+        "documentation": "docs",
+        "refactor": "enhancement",
+        "performance": "enhancement",
+    }
+    issue_type = "feature"  # default
     for label in issue.get("labels", []):
-        if label in ("bug", "fix"):
-            issue_type = "bug"
+        mapped = _LABEL_TYPE_MAP.get(label.lower(), "")
+        if mapped:
+            issue_type = mapped
             break
 
     # Build requirements text

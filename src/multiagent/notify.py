@@ -97,11 +97,108 @@ class DiscordNotifier:
             _log.exception("Unexpected Discord webhook error")
 
 
+class DiscordChannelNotifier:
+    """通过 Bot Token 直接发送消息到 Discord 频道。
+
+    使用 ClaudeClaw 的 Bot Token，消息以 Bot 身份发送。
+    """
+
+    def __init__(self, bot_token: str, channel_id: str):
+        self.bot_token = bot_token
+        self.channel_id = channel_id
+
+    def __call__(self, event: str, task_id: str, project_name: str,
+                 task_dict: dict):
+        """发送消息到 Discord 频道"""
+        color = EVENT_COLORS.get(event, COLOR_STARTED)
+        title = EVENT_LABELS.get(event, event.title())
+        status = task_dict.get("status", "?") if isinstance(task_dict, dict) else "?"
+        task_type = task_dict.get("type", "?") if isinstance(task_dict, dict) else "?"
+
+        # Build embed
+        fields = [
+            {"name": "Task", "value": f"`{task_id}`", "inline": True},
+            {"name": "Project", "value": project_name, "inline": True},
+            {"name": "Type", "value": task_type, "inline": True},
+        ]
+        if isinstance(task_dict, dict):
+            if task_dict.get("error"):
+                fields.append({"name": "Error", "value": str(task_dict["error"])[:1024]})
+            rc = task_dict.get("rejection_count", 0)
+            if rc > 0:
+                fields.append({"name": "Rejections", "value": str(rc), "inline": True})
+
+        payload = json.dumps({
+            "embeds": [{
+                "title": title,
+                "color": color,
+                "fields": fields,
+                "footer": {"text": f"AgentForge • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"},
+            }]
+        }).encode("utf-8")
+
+        try:
+            req = Request(
+                f"https://discord.com/api/v10/channels/{self.channel_id}/messages",
+                data=payload,
+                headers={
+                    "Authorization": f"Bot {self.bot_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "AgentForge/0.6.0-dev",
+                },
+            )
+            with urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201, 204):
+                    _log.warning("Discord channel message returned %d", resp.status)
+        except Exception as e:
+            _log.error("Discord channel message failed: %s", e)
+
+
+def _load_claudeclaw_config() -> dict:
+    """尝试加载 ClaudeClaw settings.json 获取 bot token 和 channel 信息"""
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        cfg_path = _P(".claude/claudeclaw/settings.json")
+        if cfg_path.exists():
+            return _j.loads(cfg_path.read_text())
+    except Exception:
+        pass
+    return {}
+
+
 def create_notifier(webhook_url: str = None,
-                    discord_webhook_url: str = None) -> list:
-    """工厂函数：根据配置创建 notifier 列表"""
+                    discord_webhook_url: str = None,
+                    discord_channel_id: str = None,
+                    bot_token: str = None) -> list:
+    """工厂函数：根据配置创建 notifier 列表。
+
+    优先级: webhook URL > bot token + channel ID > ClaudeClaw config
+    """
     notifiers = []
     url = webhook_url or discord_webhook_url
     if url:
         notifiers.append(DiscordNotifier(url))
+        return notifiers
+
+    # Try bot token + channel
+    token = bot_token
+    channel = discord_channel_id
+
+    # Fallback to ClaudeClaw config
+    if not token or not channel:
+        cc = _load_claudeclaw_config()
+        if not token:
+            token = cc.get("discord", {}).get("token", "")
+        if not channel:
+            guilds = cc.get("discord", {}).get("listenGuilds", [])
+            channels = cc.get("discord", {}).get("listenChannels", [])
+            if channels:
+                channel = str(channels[0])
+            elif guilds:
+                channel = str(guilds[0])
+
+    if token and channel:
+        notifiers.append(DiscordChannelNotifier(token, channel))
+
     return notifiers

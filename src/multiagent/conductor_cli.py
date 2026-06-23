@@ -119,7 +119,7 @@ def cmd_start(args):
     if discord_webhook:
         logger.info("  Discord: enabled")
 
-    # Create notifiers
+    # Create notifiers (auto-detect from ClaudeClaw config if available)
     notifiers = create_notifier(webhook_url=discord_webhook)
 
     project = ProjectConfig(
