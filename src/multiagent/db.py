@@ -34,6 +34,14 @@ class StateDB:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")  # 5s timeout for concurrent writes
         self._init_schema()
+        # Lightweight pruning on connect (only if DB has accumulated rows)
+        try:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM step_results").fetchone()
+            if row and row[0] > 1000:
+                self.prune_all()
+        except Exception:
+            pass
 
     def _init_schema(self):
         self.conn.executescript("""
@@ -226,6 +234,66 @@ class StateDB:
         return {"total_calls": row[0] or 0, "total_input_tokens": row[1] or 0,
                 "total_output_tokens": row[2] or 0, "total_cost_usd": round(row[3] or 0.0, 6),
                 "avg_duration_ms": int(row[4] or 0)}
+
+    # ── Data Retention & Cleanup ──
+
+    DEFAULT_RETENTION_DAYS = {
+        "step_results": 30,
+        "agent_metrics": 90,
+        "heartbeat": 7,
+        "escalations": 90,
+    }
+
+    def prune_step_results(self, days: int = None):
+        """Delete step_results older than `days` (default 30)."""
+        if days is None:
+            days = self.DEFAULT_RETENTION_DAYS["step_results"]
+        with self._write_lock:
+            self.conn.execute(
+                "DELETE FROM step_results WHERE completed_at IS NOT NULL "
+                "AND datetime(completed_at) < datetime('now', ?)",
+                (f"-{days} days",))
+            self.conn.commit()
+
+    def prune_agent_metrics(self, days: int = None):
+        """Delete agent_metrics older than `days` (default 90)."""
+        if days is None:
+            days = self.DEFAULT_RETENTION_DAYS["agent_metrics"]
+        with self._write_lock:
+            self.conn.execute(
+                "DELETE FROM agent_metrics WHERE recorded_at IS NOT NULL "
+                "AND datetime(recorded_at) < datetime('now', ?)",
+                (f"-{days} days",))
+            self.conn.commit()
+
+    def prune_heartbeat(self, days: int = None):
+        """Delete heartbeat rows older than `days` (default 7)."""
+        if days is None:
+            days = self.DEFAULT_RETENTION_DAYS["heartbeat"]
+        with self._write_lock:
+            self.conn.execute(
+                "DELETE FROM heartbeat WHERE datetime(last_beat) < datetime('now', ?)",
+                (f"-{days} days",))
+            self.conn.commit()
+
+    def cleanup_task_data(self, task_id: str):
+        """Remove step_results, agent_metrics, and heartbeat for a task."""
+        with self._write_lock:
+            for table in ("step_results", "agent_metrics", "heartbeat"):
+                self.conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+            self.conn.commit()
+
+    def vacuum(self):
+        """Reclaim disk space after large deletes."""
+        with self._write_lock:
+            self.conn.execute("VACUUM")
+
+    def prune_all(self, retention_days: dict = None):
+        """Prune all tables. Called periodically or on connect."""
+        r = retention_days or self.DEFAULT_RETENTION_DAYS
+        self.prune_step_results(r.get("step_results", 30))
+        self.prune_agent_metrics(r.get("agent_metrics", 90))
+        self.prune_heartbeat(r.get("heartbeat", 7))
 
     def close(self):
         if self.conn: self.conn.close()

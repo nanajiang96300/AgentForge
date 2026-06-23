@@ -1,11 +1,13 @@
 """Workflow Engine — Agent 生命周期管理"""
-import json, subprocess, time
+import json, os, signal, subprocess, time, logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 from .db import StateDB, Task, AgentMetrics, now_iso
 from .adapters import AgentAdapter, create as create_adapter
+
+_log = logging.getLogger("multiagent.engine")
 
 class StepStatus(Enum):
     PENDING="pending"; SPAWNING="spawning"; RUNNING="running"; COMPLETED="completed"
@@ -44,7 +46,7 @@ class AgentSpawner:
         cmd = adapter.build_command(agent_config, prompt, step)
         cwd = str(work_dir or adapter.project_root)
         p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True)
+                             stderr=subprocess.PIPE, text=True, start_new_session=True)
         self.db.heartbeat(task.id, step["id"], p.pid)
         self.db.record_step(task.id, step["id"], step["agent"], StepStatus.RUNNING.value,
                             started_at=now_iso(), adapter_name=adapter.name())
@@ -141,11 +143,87 @@ class AgentSpawner:
 
     @staticmethod
     def _kill_process(p):
-        try: p.terminate(); time.sleep(5)
-        except: pass
+        """Kill process and all its descendants via process group.
+
+        Uses os.killpg() to signal the entire process group created by
+        start_new_session=True in spawn(). Falls back to direct child
+        terminate/kill if the process group is unavailable.
+        """
+        pgid = None
         try:
-            if p.poll() is None: p.kill()
-        except: pass
+            pgid = os.getpgid(p.pid)
+        except ProcessLookupError:
+            return  # Already dead
+        except Exception:
+            pass
+
+        if pgid is None or pgid == os.getpid():
+            # Fallback: direct child only (no separate process group)
+            try:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=2)
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                _log.warning("_kill_process fallback failed for PID %d: %s", p.pid, e)
+            return
+
+        # Kill entire process group (covers grandchildren)
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except Exception as e:
+            _log.warning("killpg SIGTERM failed for PGID %d (PID %d): %s",
+                        pgid, p.pid, e)
+
+        # Wait for graceful shutdown
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # Force kill
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                _log.warning("killpg SIGKILL failed for PGID %d: %s", pgid, e)
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                _log.warning("Process PID %d (PGID %d) survived SIGKILL", p.pid, pgid)
+            except Exception:
+                pass
+
+    def reap_lost_agents(self, heartbeat_timeout: int = 60) -> int:
+        """Find agents with stale heartbeats and kill them.
+
+        Called by Conductor to clean up orphaned agent processes.
+        Returns the number of agents killed.
+        """
+        lost = self.db.get_lost_agents(heartbeat_timeout)
+        killed = 0
+        for entry in lost:
+            pid = entry.get("agent_pid")
+            if not pid:
+                continue
+            try:
+                # Create a dummy process object for _kill_process
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                killed += 1
+            except ProcessLookupError:
+                killed += 1  # Already dead, counts as cleaned
+            except Exception as e:
+                _log.warning("Failed to kill lost agent PID %d: %s", pid, e)
+        if killed:
+            _log.info("Reaped %d lost agent processes", killed)
+        return killed
+
 
 def load_yaml(path: Path) -> dict:
     import yaml

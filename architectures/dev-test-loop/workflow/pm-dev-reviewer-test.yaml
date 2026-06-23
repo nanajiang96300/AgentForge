@@ -1,0 +1,35 @@
+workflow:
+  id: "pm-dev-reviewer-test"
+  version: "1.0"
+  description: "4-step pipeline: PM analyze → Dev implement → Reviewer inspect → Test verify"
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      timeout: 300
+      output:
+        required: ["root_cause", "target_module", "complexity", "task_breakdown", "estimated_files"]
+    - id: "dev_implement"
+      agent: "dev"
+      timeout: 600
+      depends_on: "pm_analyze"
+      output:
+        required: ["branch_name", "files_changed", "commit_hash"]
+    - id: "reviewer_check"
+      agent: "reviewer"
+      timeout: 300
+      depends_on: "dev_implement"
+      on_verdict_approved:
+        action: "mark_complete"
+      on_verdict_rejected:
+        next: "dev_implement"
+      output:
+        required: ["verdict", "review_summary"]
+    - id: "test_verify"
+      agent: "test"
+      timeout: 300
+      depends_on: "reviewer_check"
+      output:
+        required: ["verdict", "test_summary"]
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

@@ -138,9 +138,10 @@ class Conductor:
             t.start()
 
     def stop(self):
-        """停止监控循环"""
+        """停止监控循环，并清理所有 in-flight agent 进程"""
         self.log.info("Conductor stop requested")
         self.state.running = False
+        self._kill_in_flight_agents()
 
     def status(self) -> dict:
         """返回 Conductor 运行时状态"""
@@ -426,8 +427,12 @@ class Conductor:
         try:
             signal.signal(signal.SIGINT, self._handle_signal)
             signal.signal(signal.SIGTERM, self._handle_signal)
+            signal.signal(signal.SIGHUP, self._handle_signal)
         except (ValueError, OSError):
             pass
+
+        # Recover orphaned tasks from prior unclean shutdown
+        self._recover_orphaned_tasks()
 
         while self.state.running:
             with self._lock:
@@ -459,9 +464,11 @@ class Conductor:
 
         # Shutdown executor
         if self._executor:
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
 
+        # Kill agents BEFORE removing PID file
+        self._kill_in_flight_agents()
         self._cleanup_pid_file()
         self.log.info("Conductor stopped (processed=%d, failed=%d, escalations=%d)",
                       self.state.tasks_processed, self.state.tasks_failed,
@@ -527,10 +534,88 @@ class Conductor:
             },
         )
 
+    def _kill_in_flight_agents(self):
+        """Kill all agent subprocesses referenced in the heartbeat table for in-flight tasks."""
+        killed = 0
+        with self._lock:
+            in_flight_ids = list(self._in_flight.keys())
+        if not in_flight_ids:
+            return
+        for task_id in in_flight_ids:
+            try:
+                for project in self.projects:
+                    db = self._connect_db(project.db_path)
+                    try:
+                        rows = db.conn.execute(
+                            "SELECT agent_pid FROM heartbeat WHERE task_id = ?",
+                            (task_id,)
+                        ).fetchall()
+                        for (agent_pid,) in rows:
+                            if agent_pid:
+                                try:
+                                    os.killpg(os.getpgid(agent_pid), signal.SIGTERM)
+                                    killed += 1
+                                except ProcessLookupError:
+                                    killed += 1
+                                except Exception as e:
+                                    self.log.warning(
+                                        "Failed to kill agent PID %d for %s: %s",
+                                        agent_pid, task_id, e)
+                    finally:
+                        db.close()
+            except Exception as e:
+                self.log.warning("Failed to kill agents for %s: %s", task_id, e)
+        if killed:
+            self.log.info("Killed %d agent processes during stop", killed)
+
+    def _recover_orphaned_tasks(self):
+        """On startup, find tasks stuck in 'running' state and mark them failed.
+
+        These tasks were running when the Conductor was killed. Their agent
+        processes may still be alive — we kill them and clean up.
+        """
+        recovered = 0
+        for project in self.projects:
+            db = self._connect_db(project.db_path)
+            try:
+                running_tasks = db.conn.execute(
+                    "SELECT id FROM tasks WHERE status = 'running'"
+                ).fetchall()
+                for (task_id,) in running_tasks:
+                    # Check heartbeat — if agent still alive, kill it
+                    heartbeat_rows = db.conn.execute(
+                        "SELECT agent_pid FROM heartbeat "
+                        "WHERE task_id = ? ORDER BY last_beat DESC LIMIT 1",
+                        (task_id,)
+                    ).fetchall()
+                    for (agent_pid,) in heartbeat_rows:
+                        if agent_pid:
+                            try:
+                                os.killpg(os.getpgid(agent_pid), signal.SIGTERM)
+                            except ProcessLookupError:
+                                pass
+                            except Exception as e:
+                                self.log.debug(
+                                    "Failed to kill orphan agent PID %d: %s", agent_pid, e)
+                    # Clean up stale data and mark task as failed
+                    db.cleanup_task_data(task_id)
+                    db.update_task_status(task_id, "failed")
+                    self.log.info("Recovered orphaned task: %s", task_id)
+                    recovered += 1
+            finally:
+                db.close()
+        if recovered:
+            self.log.info("Conductor recovered %d orphaned tasks", recovered)
+        return recovered
+
     def _handle_signal(self, signum, frame):
         sig_name = signal.Signals(signum).name
         self.log.info("Received %s, shutting down...", sig_name)
-        self.state.running = False
+        with self._lock:
+            self.state.running = False
+        if signum == signal.SIGHUP:
+            self.log.info("SIGHUP received — configuration reload is deferred to next restart")
+            # Future: re-read config files here
 
     # ── PID File ──
 

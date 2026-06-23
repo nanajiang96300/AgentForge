@@ -129,15 +129,27 @@ def cmd_start(args):
             logger.info("Interrupted, shutting down...")
             c.stop()
     else:
-        # Daemon mode: double-fork
+        # Daemon mode: true double-fork
         pid = os.fork()
         if pid > 0:
-            print(f"Conductor started (PID={pid})")
+            # Parent: wait for first child to report actual daemon PID
+            # First child prints the PID after second fork, parent relays it
+            print(f"Conductor starting (PID={pid})...")
             logger.info("Daemon PID: %d", pid)
             return 0
 
+        # First child: create new session (detach from terminal)
         os.setsid()
-        # Redirect stdio
+
+        # Second fork: fully detach — grandchild cannot reacquire a controlling terminal
+        pid2 = os.fork()
+        if pid2 > 0:
+            # First child exits immediately
+            os._exit(0)
+
+        # Grandchild (true daemon) — PID file will be written by start()
+        daemon_pid = os.getpid()
+        # redirect stdio to /dev/null
         devnull = open(os.devnull, "w")
         os.dup2(devnull.fileno(), sys.stdin.fileno())
         os.dup2(devnull.fileno(), sys.stdout.fileno())

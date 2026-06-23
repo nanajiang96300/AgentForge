@@ -26,12 +26,20 @@ MODULES = [
     ("Heartbeat: crash recovery", "test_heartbeat.py"),
     ("Metrics CLI: token/cost", "test_metrics_cli.py"),
     ("Conductor: auto-trigger + full auto", "test_conductor.py"),
+    ("Retry Caps: hard limits", "test_retry_cap.py"),
+    ("Step Hooks: lifecycle events", "test_hooks.py"),
+    ("Dashboard: page rendering + APIs", "test_dashboard.py"),
+    ("Notify: i18n + retry + truncate + debounce", "test_notify.py"),
+    ("DB Cleanup: prune + vacuum", "test_db_cleanup.py"),
+    ("Engine Process: killpg + reap", "test_engine_process.py"),
+    ("Graph Engine: DAG building + serialization", "test_graph_engine.py"),
+    ("Agent Registry: CRUD + YAML + workflow steps", "test_agent_registry.py"),
 ]
 
 def run_module(path, timeout=30):
     venv_python = str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python3")
     r = subprocess.run([venv_python, str(path)], capture_output=True, text=True, timeout=timeout)
-    return {"file": path.name, "exit": r.returncode, "passed": r.returncode == 0, "output": r.stdout}
+    return {"file": path.name, "exit": r.returncode, "passed": r.returncode == 0, "output": r.stdout + r.stderr}
 
 def main():
     skip_live = "--live" not in sys.argv

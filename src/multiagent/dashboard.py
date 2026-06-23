@@ -11,7 +11,7 @@ Flask 轻量 Web 服务，读取 state.db 显示任务队列、进度条、Token
 import json
 from pathlib import Path
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 from .db import StateDB
 from .core.progress import calculate_task_progress, progress_bar
@@ -73,18 +73,22 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
     </style>
     """
 
-    def _render_page(title, body):
+    def _render_page(title, body, auto_refresh=True):
+        refresh_tag = '<meta http-equiv="refresh" content="15">' if auto_refresh else ''
         return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="15">
-<title>{title} — AgentForge</title>{_CSS}
+{refresh_tag}
+<title>{title} — AgentForge</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+{_CSS}
 </head><body><div class="container">
 <header><h1>🤖 AgentForge Dashboard</h1>
 <div class="sub">Pipeline Monitoring • <a href="/designer" style="color:var(--purple);">Designer</a> • <a href="/commands" style="color:var(--purple);">Commands</a></div></header>
 <div class="refresh" id="clock"></div>
 <script>document.getElementById('clock').textContent='Updated: '+new Date().toLocaleTimeString()</script>
 {body}
-<footer>AgentForge v0.6.0-dev • Multi-Agent Framework</footer>
+<footer>AgentForge v0.7.0 • Multi-Agent Framework</footer>
 </div></body></html>"""
 
     def _pipeline_html(db, task_id):
@@ -198,6 +202,22 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 body.append(f'<div class="stat-card"><div class="label">Total Cost</div><div class="value green">\${metrics[3] or 0:.2f}</div></div>')
                 body.append('</div>')
 
+            # ── Charts Section (Fix 3A) ──
+            body.append('<div class="section"><h2>📈 7-Day Trends</h2>')
+            body.append('<div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">')
+            body.append('<div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px;">')
+            body.append('<h3 style="font-size:0.9em;color:var(--muted);margin-bottom:8px;">Token Usage</h3>')
+            body.append('<canvas id="tokenChart" height="200"></canvas></div>')
+            body.append('<div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px;">')
+            body.append('<h3 style="font-size:0.9em;color:var(--muted);margin-bottom:8px;">Task Pass Rate</h3>')
+            body.append('<canvas id="passRateChart" height="200"></canvas></div>')
+            body.append('</div></div>')
+
+            # ── Workflow DAG Section (Fix 3C) ──
+            body.append('<div class="section"><h2>🔀 Workflow DAG</h2>')
+            body.append('<div id="mermaid-container" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;overflow:auto;min-height:120px;text-align:center;color:var(--muted);">')
+            body.append('Loading workflow graph...</div></div>')
+
             # In-flight with progress
             if in_flight:
                 body.append('<div class="section"><h2>🔄 In-Flight Tasks</h2><table>')
@@ -213,10 +233,22 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                 body.append('</table></div>')
 
             # All tasks
-            body.append('<div class="section"><h2>📋 All Tasks</h2><table>')
-            body.append('<tr><th>ID</th><th>Type</th><th>Status</th><th>Pipeline</th><th>Created</th></tr>')
-            for t in tasks[:20]:
-                body.append('<tr>'
+            body.append('<div class="section"><h2>📋 All Tasks</h2>')
+            body.append('<div style="display:flex; gap:8px; margin-bottom:12px; align-items:center;">'
+                '<input type="text" id="searchInput" placeholder="Search task ID..." '
+                'style="flex:1;padding:8px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;" autocomplete="off">'
+                '<select id="statusFilter" style="padding:8px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;">'
+                '<option value="">All Statuses</option>'
+                '<option value="pending">Pending</option>'
+                '<option value="running">Running</option>'
+                '<option value="assigned">Assigned</option>'
+                '<option value="completed">Completed</option>'
+                '<option value="failed">Failed</option>'
+                '<option value="escalated">Escalated</option>'
+                '</select></div>')
+            body.append('<table id="taskTable"><tr><th>ID</th><th>Type</th><th>Status</th><th>Pipeline</th><th>Created</th></tr>')
+            for t in tasks[:50]:
+                body.append('<tr class="task-row" data-status="' + t["status"] + '" data-id="' + t["id"] + '">'
                     f'<td><code>{t["id"][:14]}</code></td>'
                     f'<td>{t["type"]}</td>'
                     f'<td>{_badge(t["status"])}</td>'
@@ -224,6 +256,60 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
                     f'<td>{t["created_at"][:19] if t["created_at"] else "-"}</td>'
                     '</tr>')
             body.append('</table></div>')
+
+            # ── Charts + Search/Filter + DAG JavaScript ──
+            body.append('<script>'
+                '// -- Charts (Fix 3A)'
+                'fetch("/api/timeseries").then(function(r){return r.json()}).then(function(d){'
+                'if(d.token_trend&&d.token_trend.length){'
+                'new Chart(document.getElementById("tokenChart"),{'
+                'type:"bar",data:{labels:d.token_trend.map(function(x){return x.date}),'
+                'datasets:[{label:"Tokens",data:d.token_trend.map(function(x){return x.tokens}),'
+                'backgroundColor:"#58a6ff",borderColor:"#58a6ff"}]},'
+                'options:{responsive:true,maintainAspectRatio:false,'
+                'plugins:{legend:{labels:{color:"#8b949e"}}},'
+                'scales:{x:{ticks:{color:"#8b949e"}},y:{ticks:{color:"#8b949e",'
+                'callback:function(v){return v>=1e6?(v/1e6)+"M":v>=1e3?(v/1e3)+"K":v}}}}});'
+                'new Chart(document.getElementById("passRateChart"),{'
+                'type:"line",data:{labels:d.pass_rate.map(function(x){return x.date}),'
+                'datasets:[{label:"Pass Rate %",data:d.pass_rate.map(function(x){return x.rate}),'
+                'borderColor:"#3fb950",backgroundColor:"rgba(63,185,80,0.1)",fill:true,tension:0.3}]},'
+                'options:{responsive:true,maintainAspectRatio:false,'
+                'plugins:{legend:{labels:{color:"#8b949e"}}},'
+                'scales:{x:{ticks:{color:"#8b949e"}},y:{min:0,max:100,ticks:{color:"#8b949e"}}}}});'
+                '}});'
+                '// -- Search/Filter (Fix 3B)'
+                '(function(){'
+                'var search=document.getElementById("searchInput");'
+                'var status=document.getElementById("statusFilter");'
+                'if(!search||!status)return;'
+                'function filter(){'
+                'var q=search.value.toLowerCase();'
+                'var s=status.value;'
+                'document.querySelectorAll(".task-row").forEach(function(row){'
+                'var mid=row.getAttribute("data-id").toLowerCase().includes(q);'
+                'var ms=!s||row.getAttribute("data-status")===s;'
+                'row.style.display=(mid&&ms)?"":"none";});}'
+                'search.addEventListener("input",filter);'
+                'status.addEventListener("change",filter);})();'
+                '// -- Workflow DAG (Fix 3C)'
+                'fetch("/api/workflow-dag").then(function(r){return r.json()}).then(function(d){'
+                'if(d.error||!d.nodes.length){'
+                'document.getElementById("mermaid-container").innerHTML='
+                '"<span style=\\"color:var(--muted)\\">No workflow DAG available</span>";return;}'
+                'var graph=["graph LR"];'
+                'd.nodes.forEach(function(n){'
+                'var label=n.agent+": "+n.id;'
+                'var cls=n.status==="completed"?"done":n.status==="running"?"active":"pending";'
+                'graph.push(n.id+"(\\""+label+"\\"):::"+cls);});'
+                'd.edges.forEach(function(e){graph.push(e.source+"-->"+e.target);});'
+                'var mc=document.getElementById("mermaid-container");'
+                'mc.innerHTML="<div class=\\"mermaid\\">"+graph.join("\\n")+"</div>";'
+                'mermaid.run({nodes:[mc.querySelector(".mermaid")]});'
+                '}).catch(function(e){'
+                'document.getElementById("mermaid-container").innerHTML='
+                '"<span style=\\"color:var(--muted)\\">Workflow DAG unavailable</span>";});'
+                '</script>')
 
             return _render_page("Dashboard", '\n'.join(body))
         finally:
@@ -245,9 +331,139 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
         finally:
             db.close()
 
+    @app.route("/api/status")
+    def api_status():
+        """Return full queue status with all five task state counts."""
+        db = StateDB(db_path)
+        try:
+            db.connect()
+        except Exception:
+            return jsonify({"pending": 0, "running": 0, "completed": 0,
+                           "failed": 0, "escalated": 0})
+        try:
+            pending = len(db.get_pending_tasks())
+            row = db.conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = 'running'").fetchone()
+            running = row[0] if row else 0
+            comp = db.conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = 'completed'").fetchone()
+            completed = comp[0] if comp else 0
+            fail = db.conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = 'failed'").fetchone()
+            failed = fail[0] if fail else 0
+            escalated = len(db.get_escalated_tasks())
+            return jsonify({
+                "pending": pending, "running": running,
+                "completed": completed, "failed": failed,
+                "escalated": escalated,
+            })
+        except Exception:
+            return jsonify({"pending": 0, "running": 0, "completed": 0,
+                           "failed": 0, "escalated": 0})
+        finally:
+            db.close()
+
+    @app.route("/api/timeseries")
+    def api_timeseries():
+        """Return time-series data for charts: daily token usage and task pass rate."""
+        db = StateDB(db_path)
+        db.connect()
+        try:
+            token_rows = db.conn.execute(
+                """SELECT date(recorded_at) as day,
+                          SUM(input_tokens + output_tokens) as tokens,
+                          SUM(cost_usd) as cost,
+                          COUNT(*) as calls
+                   FROM agent_metrics
+                   WHERE recorded_at IS NOT NULL
+                     AND date(recorded_at) >= date('now', '-7 days')
+                   GROUP BY date(recorded_at)
+                   ORDER BY day ASC"""
+            ).fetchall()
+            task_rows = db.conn.execute(
+                """SELECT date(completed_at) as day,
+                          COUNT(*) as total,
+                          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as passed
+                   FROM tasks
+                   WHERE completed_at IS NOT NULL
+                     AND date(completed_at) >= date('now', '-7 days')
+                   GROUP BY date(completed_at)
+                   ORDER BY day ASC"""
+            ).fetchall()
+            return jsonify({
+                "token_trend": [
+                    {"date": r[0], "tokens": r[1] or 0,
+                     "cost": round(r[2] or 0, 4), "calls": r[3] or 0}
+                    for r in token_rows
+                ],
+                "pass_rate": [
+                    {"date": r[0], "total": r[1] or 0, "passed": r[2] or 0,
+                     "rate": round((r[2] or 0) * 100 / max(r[1] or 1, 1), 1)}
+                    for r in task_rows
+                ],
+            })
+        finally:
+            db.close()
+
+    @app.route("/api/workflow-dag")
+    def api_workflow_dag():
+        """Return DAG structure for Mermaid visualization."""
+        db = StateDB(db_path)
+        db.connect()
+        try:
+            from .config.loader import find_workflow_yaml
+            wf_path = find_workflow_yaml()
+            if not wf_path or not wf_path.exists():
+                return jsonify({"nodes": [], "edges": [], "error": "No workflow found"})
+
+            from .engine import load_yaml
+            wf_def = load_yaml(wf_path)
+            wf = wf_def.get("workflow", {})
+            steps = wf.get("steps", [])
+
+            nodes = []
+            edges = []
+            for step in steps:
+                sid = step["id"]
+                agent = step.get("agent", "?")
+                nodes.append({"id": sid, "agent": agent, "status": "pending"})
+                deps = step.get("depends_on", [])
+                if isinstance(deps, str):
+                    deps = [deps]
+                for dep in deps:
+                    edges.append({"source": dep, "target": sid, "label": ""})
+
+            # Color nodes based on running task's step statuses
+            running_task = db.conn.execute(
+                "SELECT id FROM tasks WHERE status='running' LIMIT 1"
+            ).fetchone()
+            if running_task:
+                task_id = running_task[0]
+                step_rows = db.conn.execute(
+                    "SELECT DISTINCT step_id, status FROM step_results "
+                    "WHERE task_id=? ORDER BY id",
+                    (task_id,)
+                ).fetchall()
+                seen = set()
+                for r in step_rows:
+                    if r[0] not in seen:
+                        seen.add(r[0])
+                        for node in nodes:
+                            if node["id"] == r[0]:
+                                node["status"] = r[1]
+
+            return jsonify({
+                "nodes": nodes, "edges": edges,
+                "workflow_id": wf.get("id", "unknown"),
+            })
+        except Exception as e:
+            return jsonify({"nodes": [], "edges": [], "error": str(e)})
+        finally:
+            db.close()
+
     @app.route("/health")
     def health():
-        return jsonify({"status": "ok", "version": "0.6.0-dev"}), 200
+        return jsonify({"status": "ok", "version": "0.7.0"}), 200
 
     # ── B2: Visual Workflow Designer ──
 
@@ -280,12 +496,16 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 <script>
 const AGENTS = {agents_json};
 let nodes=[],edges=[];
+if(loadState()){{draw();setTimeout(function(){{upSel&&upSel();setInterval(upSel,800);}},200);}}
 
-function addNode(name){{var a=AGENTS.find(x=>x.name===name);var n={{id:'n'+Date.now(),label:name.toUpperCase(),agent:name,x:80+nodes.length*20,y:80+nodes.length*25,timeout:a?a.timeout:300}};nodes.push(n);draw();}}
+function addNode(name){{var a=AGENTS.find(x=>x.name===name);var n={{id:'n'+Date.now()+'_'+Math.random().toString(36).substr(2,5),label:name.toUpperCase(),agent:name,x:80+nodes.length*20,y:80+nodes.length*25,timeout:a?a.timeout:300}};nodes.push(n);draw();saveState();}}
 
-function addEdge(f,t){{if(f&&t&&f!==t&&f!=='—'&&t!=='—'){{edges.push({{from:f,to:t}});draw();}}}}
+function addEdge(f,t){{if(f&&t&&f!==t&&f!=='—'&&t!=='—'){{edges.push({{from:f,to:t}});draw();saveState();}}}}
 
-function removeNode(id){{nodes=nodes.filter(n=>n.id!==id);edges=edges.filter(e=>e.from!==id&&e.to!==id);draw();}}
+function removeNode(id){{nodes=nodes.filter(n=>n.id!==id);edges=edges.filter(e=>e.from!==id&&e.to!==id);draw();saveState();}}
+
+function saveState(){{try{{localStorage.setItem('agentforge-designer',JSON.stringify({{nodes:nodes,edges:edges}}));}}catch(e){{}}}}
+function loadState(){{try{{var d=JSON.parse(localStorage.getItem('agentforge-designer'));if(d&&d.nodes){{nodes=d.nodes;edges=d.edges||[];return true;}}}}catch(e){{}}return false;}}
 
 function draw(){{
 var s=document.getElementById('canvas');s.innerHTML='';
@@ -293,13 +513,13 @@ var defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
 defs.innerHTML='<marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#58a6ff\"/></marker>';
 s.appendChild(defs);
 edges.forEach(e=>{{var f=nodes.find(n=>n.id===e.from),t=nodes.find(n=>n.id===e.to);if(f&&t){{var l=document.createElementNS('http://www.w3.org/2000/svg','line');l.setAttribute('x1',f.x+60);l.setAttribute('y1',f.y+25);l.setAttribute('x2',t.x+60);l.setAttribute('y2',t.y+25);l.setAttribute('stroke','#58a6ff');l.setAttribute('stroke-width','2');l.setAttribute('marker-end','url(#arrow)');s.appendChild(l);}}}});
-nodes.forEach(n=>{{var g=document.createElementNS('http://www.w3.org/2000/svg','g');g.setAttribute('transform','translate('+n.x+','+n.y+')');g.style.cursor='move';var r=document.createElementNS('http://www.w3.org/2000/svg','rect');r.setAttribute('width','120');r.setAttribute('height','50');r.setAttribute('rx','8');r.setAttribute('fill','#161b22');r.setAttribute('stroke','#30363d');r.setAttribute('stroke-width','2');g.appendChild(r);var t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x','60');t.setAttribute('y','20');t.setAttribute('text-anchor','middle');t.setAttribute('fill','#c9d1d9');t.setAttribute('font-size','13');t.setAttribute('font-weight','600');t.textContent=n.label;g.appendChild(t);var u=document.createElementNS('http://www.w3.org/2000/svg','text');u.setAttribute('x','60');u.setAttribute('y','38');u.setAttribute('text-anchor','middle');u.setAttribute('fill','#8b949e');u.setAttribute('font-size','11');u.textContent=n.timeout+'s';g.appendChild(u);var drag=null,ox,oy;g.onmousedown=function(ev){{drag=n;ox=ev.clientX-n.x;oy=ev.clientY-n.y;}};g.ondblclick=function(){{removeNode(n.id);}};s.appendChild(g);}});
+nodes.forEach(n=>{{var g=document.createElementNS('http://www.w3.org/2000/svg','g');g.setAttribute('transform','translate('+n.x+','+n.y+')');g.setAttribute('data-node-id',n.id);g.style.cursor='move';var r=document.createElementNS('http://www.w3.org/2000/svg','rect');r.setAttribute('width','120');r.setAttribute('height','50');r.setAttribute('rx','8');r.setAttribute('fill','#161b22');r.setAttribute('stroke','#30363d');r.setAttribute('stroke-width','2');g.appendChild(r);var t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x','60');t.setAttribute('y','20');t.setAttribute('text-anchor','middle');t.setAttribute('fill','#c9d1d9');t.setAttribute('font-size','13');t.setAttribute('font-weight','600');t.textContent=n.label;g.appendChild(t);var u=document.createElementNS('http://www.w3.org/2000/svg','text');u.setAttribute('x','60');u.setAttribute('y','38');u.setAttribute('text-anchor','middle');u.setAttribute('fill','#8b949e');u.setAttribute('font-size','11');u.textContent=n.timeout+'s';g.appendChild(u);var drag=null,ox,oy;g.onmousedown=function(ev){{drag=n;ox=ev.clientX-n.x;oy=ev.clientY-n.y;}};g.ondblclick=function(){{removeNode(n.id);}};s.appendChild(g);}});
 var upSel=function(){{
 ['efrom','eto'].forEach(id=>{{var sel=document.getElementById(id),v=sel.value;sel.innerHTML='<option>—</option>';nodes.forEach(n=>sel.innerHTML+='<option value=\"'+n.id+'\">'+n.label+'</option>');if(v)sel.value=v;}});}};
 document.onmousemove=function(e){{if(window._dragNode){{window._dragNode.x=e.clientX-window._dragOffX;window._dragNode.y=e.clientY-window._dragOffY;draw();}}}};
 document.onmouseup=function(){{window._dragNode=null;}};
-// Re-bind drag vars at global scope
-nodes.forEach(n=>{{var orig=n;var g=document.querySelectorAll('g');g.forEach(gg=>{{if(gg.querySelector('text')&&gg.querySelector('text').textContent===orig.label){{gg.onmousedown=function(ev){{window._dragNode=orig;window._dragOffX=ev.clientX-orig.x;window._dragOffY=ev.clientY-orig.y;}};}}}});}});
+// Re-bind drag vars at global scope (use data-node-id for correct node targeting)
+nodes.forEach(n=>{{var orig=n;var gg=document.querySelector('g[data-node-id=\"'+orig.id+'\"]');if(gg){{gg.onmousedown=function(ev){{window._dragNode=orig;window._dragOffX=ev.clientX-orig.x;window._dragOffY=ev.clientY-orig.y;}};}}}});
 setInterval(upSel,800);
 }}
 
@@ -313,7 +533,7 @@ document.getElementById('yaml-out').textContent=y.join('\\n');
 var btns=document.getElementById('agent-btns');
 AGENTS.forEach(a=>{{var b=document.createElement('button');b.textContent='+'+a.name.toUpperCase();b.title=a.description;b.onclick=function(){{addNode(a.name);}};b.style.cssText='padding:8px 14px;background:var(--purple);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;';btns.appendChild(b);}});
 </script>"""
-        return _render_page("Designer", body)
+        return _render_page("Designer", body, auto_refresh=False)
 
     # ── B3: Web Command Center ──
 
@@ -372,6 +592,6 @@ AGENTS.forEach(a=>{{var b=document.createElement('button');b.textContent='+'+a.n
 </form>
 <pre id="cmd-result" style="background:#0d1117;color:var(--green);padding:12px;border-radius:4px;margin-top:12px;max-height:400px;overflow:auto;">{result}</pre>
 <script>function runCmd(c){{document.getElementById('cmd-input').value=c;document.forms[0].submit();}}</script></div>"""
-        return _render_page("Commands", body)
+        return _render_page("Commands", body, auto_refresh=False)
 
     return app
