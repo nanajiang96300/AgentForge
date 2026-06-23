@@ -195,14 +195,20 @@ class WorkflowOrchestrator:
                     self.db.update_task_status(task.id, "escalated", step.id)
                     return result
 
-            # Rejection loop 检查 (case-insensitive)
+            # Rejection / Approval 检查 (case-insensitive)
             verdict = str(result.output.get("verdict", "")).lower()
             if step.on_verdict_rejected and verdict == "rejected":
                 return self._handle_rejection(task, step, result)
 
             step.state = StepState.COMPLETED
 
-            # 成功后的动作
+            # 处理 test_verify on_verdict_approved
+            if step.on_verdict_approved and verdict == "approved":
+                approved_action = step.on_verdict_approved.get("action", "")
+                if approved_action == "mark_complete":
+                    self.db.update_task_status(task.id, "completed", step.id)
+
+            # 成功后的动作 (pm_analyze on_success)
             action = step.on_success.get("action", "")
             if "assigned" in action or step.on_success.get("to_state"):
                 self.db.update_task_status(task.id, step.on_success.get("to_state", "assigned"), step.id)

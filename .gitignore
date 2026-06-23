@@ -51,3 +51,5 @@ Thumbs.db
 examples/devlog/
 !examples/devlog/requirements.md
 .claude/claudeclaw/
+.claude/
+.conductor.pid

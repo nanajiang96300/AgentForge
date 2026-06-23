@@ -184,13 +184,27 @@ def cmd_status(args):
         print("Error: No workflow YAML found.")
         return 1
 
+    # Detect PID file (same default as cmd_start)
+    pid_file = db_path.parent / ".conductor.pid"
+
+    # Check if conductor is actually running
+    running = False
+    conductor_pid = None
+    if pid_file.exists():
+        try:
+            conductor_pid = int(pid_file.read_text().strip())
+            os.kill(conductor_pid, 0)  # Signal 0 just checks existence
+            running = True
+        except (ValueError, ProcessLookupError, OSError):
+            conductor_pid = None
+
     project = ProjectConfig(
         name=db_path.parent.name or "default",
         db_path=db_path,
         workflow_path=workflow_path,
     )
 
-    c = Conductor(projects=[project])
+    c = Conductor(projects=[project], pid_file=pid_file)
     status = c.status()
 
     print(f"{'='*55}")
@@ -198,9 +212,9 @@ def cmd_status(args):
     print(f"{'='*55}")
 
     cd = status["conductor"]
-    print(f"  State:        {'▶ RUNNING' if cd['running'] else '■ STOPPED'}")
-    print(f"  PID:          {cd['pid']}")
-    print(f"  PID File:     {cd['pid_file']} ({'exists' if cd['pid_file_exists'] else 'missing'})")
+    actual_state = "▶ RUNNING" if running else "■ STOPPED"
+    print(f"  State:        {actual_state} (PID {conductor_pid})")
+    print(f"  PID File:     {pid_file} ({'exists' if pid_file.exists() else 'missing'})")
     if cd["started_at"]:
         print(f"  Started:      {cd['started_at']}")
     if cd["last_poll_at"]:
@@ -477,9 +491,15 @@ def _build_parser():
     return parser
 
 
-def main():
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    # Strip 'conductor' subcommand if present (from 'multiagent conductor <cmd>')
+    if argv and argv[0] == "conductor":
+        argv = argv[1:]
+
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
