@@ -137,6 +137,8 @@ def cmd_start(args):
         pid_file=pid_file,
         max_workers=args.workers,
     )
+    if args.pm_auto_discover:
+        c.pm_auto_discover = True
     _conductor = c
 
     if foreground:
@@ -440,6 +442,8 @@ def _build_parser():
                          help="PID file path")
     p_start.add_argument("--workers", "-w", type=int, default=3,
                          help="Max concurrent tasks (default: 3)")
+    p_start.add_argument("--pm-auto-discover", action="store_true",
+                         help="Auto-discover GitHub Issues as tasks")
     p_start.add_argument("--discord-webhook", default=None,
                          help="Discord webhook URL for notifications")
 
@@ -456,6 +460,7 @@ def _build_parser():
     p_restart.add_argument("--interval", "-i", type=int, default=5)
     p_restart.add_argument("--pid-file", default=None)
     p_restart.add_argument("--workers", "-w", type=int, default=3)
+    p_restart.add_argument("--pm-auto-discover", action="store_true")
     p_restart.add_argument("--discord-webhook", default=None)
 
     # alerts

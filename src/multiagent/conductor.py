@@ -241,6 +241,8 @@ class Conductor:
         self._lock = threading.Lock()
         self._in_flight: dict[str, InFlightTask] = {}
         self._executor: Optional[ThreadPoolExecutor] = None
+        self.pm_auto_discover = False  # Set by CLI
+        self.pm_discover_labels = ["bug", "feature", "enhancement"]
         self.log = logger or _get_default_logger()
         self.notifiers = notifiers or []
 
@@ -566,6 +568,10 @@ class Conductor:
                     self._check_escalations(project)
                     self._check_stop_signal(project)
 
+                # PM auto-discovery (GitHub Issues → tasks)
+                if self.pm_auto_discover and self.state.running:
+                    self._discover_and_submit()
+
                 # Dispatch ALL pending tasks in parallel
                 if self.state.running:
                     started = self.process_all()
@@ -694,6 +700,31 @@ class Conductor:
                 self.log.info("PID file removed: %s", self.state.pid_file)
             except OSError:
                 pass
+
+    # ── PM Auto-Discovery ──
+
+    def _discover_and_submit(self):
+        """从 GitHub Issues 自动发现并提交需求"""
+        try:
+            from .pm_discover import discover_github_issues, submit_issue_as_task, mark_issue_submitted
+
+            for project in self.projects:
+                db = self._connect_db(project.db_path)
+                try:
+                    issues = discover_github_issues(
+                        repo_path=Path.cwd(),
+                        labels=self.pm_discover_labels,
+                    )
+                    for issue in issues:
+                        task_id = submit_issue_as_task(issue, db)
+                        if task_id:
+                            mark_issue_submitted(Path.cwd(), issue["number"])
+                            self.log.info("PM auto-discovered: GH #%d → %s",
+                                         issue["number"], task_id)
+                finally:
+                    db.close()
+        except Exception:
+            self.log.debug("PM discovery skipped (gh CLI may not be available)")
 
     # ── Notifications ──
 

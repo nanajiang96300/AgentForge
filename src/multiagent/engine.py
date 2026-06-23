@@ -46,18 +46,47 @@ class AgentSpawner:
         return p
 
     def _build_prompt(self, task, step):
-        parts = [step.get("description", f"Execute: {step['id']}")]
+        agent_type = step.get("agent", "")
+        parts = []
+
+        # Load prompt template if available
+        template = self._load_prompt_template(agent_type)
+        if template:
+            parts.append(template)
+
+        parts.append(step.get("description", f"Execute: {step['id']}"))
         parts.append(f"\nTask: {task.id} ({task.type})")
-        inp = step.get("input",{})
-        if inp: parts.append(f"\nContext: {json.dumps(inp, ensure_ascii=False)}")
-        # Tell the agent exactly what JSON fields are required
+        inp = step.get("input", {})
+        if inp:
+            parts.append(f"\nContext: {json.dumps(inp, ensure_ascii=False)}")
+
+        # Required output fields with validation guidance
         required = step.get("output", {}).get("required", [])
         if required:
-            parts.append(f"\nYou MUST return a JSON block with these exact fields: {json.dumps(required)}")
-            parts.append("Example: ```json\n{\"" + '": "...",\n  "'.join(required) + '": "..."}\n```')
+            parts.append(
+                f"\n## Required JSON Output\n"
+                f"You MUST return a ```json block with these exact fields: "
+                f"{json.dumps(required)}\n"
+                f"If validation fails due to missing fields, you will be retried. "
+                f"Ensure ALL required fields are present in your JSON output."
+            )
         else:
             parts.append("\n\nReturn a JSON summary with required output fields.")
+
         return "\n".join(parts)
+
+    def _load_prompt_template(self, agent_type: str) -> str:
+        """Load prompt template from architectures/*/prompts/<agent>.md"""
+        try:
+            from pathlib import Path
+            # Search for the template relative to project root
+            prompt_dir = Path.cwd() / "architectures" / "dev-test-loop" / "prompts"
+            template_file = prompt_dir / f"{agent_type}.md"
+            if template_file.exists():
+                return template_file.read_text() + "\n\n---\n\n"
+        except Exception:
+            pass
+        return ""
 
     def monitor(self, task, step, process, timeout=600, adapter=None):
         if adapter is None: adapter = self.adapter
