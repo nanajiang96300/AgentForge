@@ -14,15 +14,7 @@ import argparse
 from pathlib import Path
 
 from .db import StateDB
-
-
-def find_state_db():
-    for p in [Path.cwd()] + list(Path.cwd().parents):
-        for pat in ["**/state.db", ".framework/workflow/state.db"]:
-            m = list(p.glob(pat))
-            if m:
-                return m[0]
-    return Path.cwd() / "state.db"
+from .config.loader import find_state_db
 
 
 def parse_metrics_args(argv=None):

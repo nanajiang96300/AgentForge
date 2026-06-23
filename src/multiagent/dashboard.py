@@ -14,20 +14,13 @@ from pathlib import Path
 from flask import Flask, jsonify
 
 from .db import StateDB
-from .conductor import _calculate_task_progress
-
-
-def _find_db():
-    cwd = Path.cwd()
-    for p in [cwd / "state.db", cwd / ".framework" / "workflow" / "state.db"]:
-        if p.exists():
-            return p
-    return cwd / "state.db"
+from .core.progress import calculate_task_progress, progress_bar
+from .config.loader import find_state_db
 
 
 def create_dashboard_app(db_path: Path = None) -> Flask:
     if db_path is None:
-        db_path = _find_db()
+        db_path = find_state_db()
 
     app = Flask(__name__)
 
@@ -95,20 +88,29 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 </div></body></html>"""
 
     def _pipeline_html(db, task_id):
-        steps_order = [("pm_analyze", "PM"), ("dev_fix", "Dev"), ("test_verify", "Test")]
-        step_status = {}
+        """Dynamic pipeline visualization — reads steps from DB, no hardcoded names."""
         rows = db.conn.execute(
-            "SELECT step_id, status FROM step_results WHERE task_id = ? ORDER BY id",
+            "SELECT DISTINCT step_id, status FROM step_results "
+            "WHERE task_id = ? ORDER BY id",
             (task_id,)
         ).fetchall()
+        # Build unique step list preserving order
+        seen = set()
+        steps = []
         for r in rows:
-            step_status[r[0]] = r[1]
+            if r[0] not in seen:
+                seen.add(r[0])
+                steps.append((r[0], r[1]))
+
+        if not steps:
+            return '<div class="pipeline"><span class="step pending">—</span></div>'
+
         parts = ['<div class="pipeline">']
-        for i, (sid, label) in enumerate(steps_order):
+        for i, (sid, status) in enumerate(steps):
             if i > 0:
                 parts.append('<span class="arrow">→</span>')
-            s = step_status.get(sid, "pending")
-            cls = "done" if s == "completed" else ("active" if s == "running" else "pending")
+            label = sid.replace("_", " ").title()[:12]
+            cls = "done" if status == "completed" else ("active" if status == "running" else "pending")
             parts.append(f'<span class="step {cls}">{label}</span>')
         parts.append('</div>')
         return ''.join(parts)
@@ -117,14 +119,18 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
         return f'<span class="badge {status}">{status}</span>'
 
     def _progress_html(db, task_id):
-        p = _calculate_task_progress(db, task_id)
+        p = calculate_task_progress(db, task_id)
         pct = p["pct"]
         stage = p["stage"]
-        cls = {"pm": "pm", "pm_done": "pm", "dev": "dev",
-               "dev_done": "dev", "test": "test"}.get(stage, "done")
+        # Map stage to CSS class — generic, no hardcoded step names
+        cls = "done" if stage == "done" else (
+            "test" if "test" in stage else (
+            "dev" if "dev" in stage else "pm"))
         subtasks = ""
-        if p.get("total_subtasks", 0) > 0:
-            subtasks = f' ({p["completed_subtasks"]}/{p["total_subtasks"]})'
+        if p.get("subtasks_total", 0) > 0:
+            subtasks = f' ({p.get("subtasks_done", 0)}/{p["subtasks_total"]})'
+        elif p.get("completed_steps", 0) > 0:
+            subtasks = f' ({p["completed_steps"]}/{p["total_steps"]} steps)'
         return (f'<div class="progress-bar">'
                 f'<div class="bar"><div class="fill {cls}" style="width:{pct}%"></div></div>'
                 f'<div class="pct">{pct}%{subtasks}</div></div>')
