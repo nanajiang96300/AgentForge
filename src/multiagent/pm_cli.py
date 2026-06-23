@@ -13,6 +13,22 @@ from pathlib import Path
 from datetime import datetime, timezone
 from .db import StateDB, Task, now_iso
 
+
+def _cmd_dashboard(argv):
+    """启动 Web Dashboard"""
+    port = 5001
+    host = "127.0.0.1"
+    for i, a in enumerate(argv):
+        if a.startswith("--port="):
+            port = int(a.split("=")[1])
+        elif a.startswith("--host="):
+            host = a.split("=")[1]
+
+    from .dashboard import create_dashboard_app
+    app = create_dashboard_app()
+    print(f"AgentForge Dashboard: http://{host}:{port}")
+    app.run(host=host, port=port, debug=False)
+
 def find_state_db():
     """查找 state.db"""
     cwd = Path.cwd()
@@ -173,6 +189,7 @@ def main():
         print("  multiagent run <workflow.yaml>           Run a workflow through Engine")
         print("  multiagent metrics [--agent] [--json]     View token/cost metrics")
         print("  multiagent conductor start|status|stop    Conductor monitoring loop")
+        print("  multiagent dashboard                       Web Dashboard (http://127.0.0.1:5001)")
         print("  multiagent pm init                       Initialize .pm/ workspace")
         print("  multiagent pm submit <requirements.md>    Submit requirements")
         print("  multiagent pm list                        List all tasks")
@@ -195,6 +212,11 @@ def main():
     if sys.argv[1] == "conductor":
         from .conductor_cli import main as conductor_main
         conductor_main()
+        return
+
+    # Dispatch: multiagent dashboard → dashboard server
+    if sys.argv[1] == "dashboard":
+        _cmd_dashboard(sys.argv[2:])
         return
 
     # Support both: multiagent pm <cmd>  and  multiagent <cmd>
