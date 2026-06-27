@@ -126,7 +126,18 @@ def _cmd_dashboard(argv):
             host = a.split("=")[1]
 
     from ..dashboard import create_dashboard_app
-    app = create_dashboard_app()
+    from ..services.dashboard_service import DashboardService
+    from ..persistence.task_repo import TaskRepository
+    from ..persistence.metrics_repo import MetricsRepository
+    from ..persistence.escalation_repo import EscalationRepository
+    from ..db import StateDB
+    from ..config.loader import find_state_db
+    db = StateDB(find_state_db())
+    db.connect()
+    ds = DashboardService(
+        TaskRepository(db), MetricsRepository(db), EscalationRepository(db)
+    )
+    app = create_dashboard_app(dashboard_service=ds)
     print(f"AgentForge Dashboard: http://{host}:{port}")
     app.run(host=host, port=port, debug=False)
 
