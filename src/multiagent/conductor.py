@@ -89,6 +89,9 @@ class Conductor:
         notifiers: Optional[list[Callable]] = None,
         pid_file: Optional[Path] = None,
         max_workers: int = 3,
+        workflow_service=None,
+        recovery_service=None,
+        discovery_service=None,
     ):
         # Single-project mode (backward compat)
         self._single_db = db_path
@@ -117,6 +120,20 @@ class Conductor:
         self.pm_discover_labels = ["bug", "feature", "enhancement"]
         self.log = logger or _get_default_logger()
         self.notifiers = notifiers or []
+
+        # Services — accept injected instances or create defaults
+        self._workflow_service = workflow_service
+        self._recovery_service = recovery_service
+        self._discovery = discovery_service
+        if self._workflow_service is None:
+            from .services.workflow_service import WorkflowService
+            self._workflow_service = WorkflowService()
+        if self._recovery_service is None:
+            from .services.recovery_service import RecoveryService
+            self._recovery_service = RecoveryService()
+        if self._discovery is None:
+            from .services.discovery_service import DiscoveryService
+            self._discovery = DiscoveryService()
 
     # ── Public API ──
 
@@ -336,10 +353,8 @@ class Conductor:
             self._notify("started", task_id, project.name, task_dict)
 
             try:
-                from .engine_cli import cmd_run
-
-                result_id = cmd_run(
-                    db=db,
+                result_id = self._workflow_service.execute(
+                    db_path=db_path,
                     workflow_path=str(project.workflow_path),
                     task_id=task_id,
                     roles_path=str(project.roles_path) if project.roles_path else None,
@@ -405,9 +420,8 @@ class Conductor:
                 if esc["task_id"] == task_id:
                     db.resolve_escalation(esc["id"], "retry")
 
-            from .engine_cli import cmd_run
-            return cmd_run(
-                db=db,
+            return self._workflow_service.execute(
+                db_path=project.db_path,
                 workflow_path=str(project.workflow_path),
                 task_id=task_id,
                 roles_path=str(project.roles_path) if project.roles_path else None,
@@ -536,77 +550,36 @@ class Conductor:
 
     def _kill_in_flight_agents(self):
         """Kill all agent subprocesses referenced in the heartbeat table for in-flight tasks."""
-        killed = 0
+        from .persistence.task_repo import TaskRepository
+
         with self._lock:
             in_flight_ids = list(self._in_flight.keys())
         if not in_flight_ids:
             return
-        for task_id in in_flight_ids:
-            try:
-                for project in self.projects:
-                    db = self._connect_db(project.db_path)
-                    try:
-                        rows = db.conn.execute(
-                            "SELECT agent_pid FROM heartbeat WHERE task_id = ?",
-                            (task_id,)
-                        ).fetchall()
-                        for (agent_pid,) in rows:
-                            if agent_pid:
-                                try:
-                                    os.killpg(os.getpgid(agent_pid), signal.SIGTERM)
-                                    killed += 1
-                                except ProcessLookupError:
-                                    killed += 1
-                                except Exception as e:
-                                    self.log.warning(
-                                        "Failed to kill agent PID %d for %s: %s",
-                                        agent_pid, task_id, e)
-                    finally:
-                        db.close()
-            except Exception as e:
-                self.log.warning("Failed to kill agents for %s: %s", task_id, e)
-        if killed:
-            self.log.info("Killed %d agent processes during stop", killed)
+
+        projects = [{"db_path": p.db_path, "name": p.name} for p in self.projects]
+
+        def _repo_factory(db_path):
+            db = StateDB(db_path)
+            db.connect()
+            return TaskRepository(db)
+
+        return self._recovery_service.kill_in_flight(
+            in_flight_ids, projects, task_repo_factory=_repo_factory
+        )
 
     def _recover_orphaned_tasks(self):
-        """On startup, find tasks stuck in 'running' state and mark them failed.
+        """On startup, find tasks stuck in 'running' state and mark them failed."""
+        from .persistence.task_repo import TaskRepository
 
-        These tasks were running when the Conductor was killed. Their agent
-        processes may still be alive — we kill them and clean up.
-        """
-        recovered = 0
-        for project in self.projects:
-            db = self._connect_db(project.db_path)
-            try:
-                running_tasks = db.conn.execute(
-                    "SELECT id FROM tasks WHERE status = 'running'"
-                ).fetchall()
-                for (task_id,) in running_tasks:
-                    # Check heartbeat — if agent still alive, kill it
-                    heartbeat_rows = db.conn.execute(
-                        "SELECT agent_pid FROM heartbeat "
-                        "WHERE task_id = ? ORDER BY last_beat DESC LIMIT 1",
-                        (task_id,)
-                    ).fetchall()
-                    for (agent_pid,) in heartbeat_rows:
-                        if agent_pid:
-                            try:
-                                os.killpg(os.getpgid(agent_pid), signal.SIGTERM)
-                            except ProcessLookupError:
-                                pass
-                            except Exception as e:
-                                self.log.debug(
-                                    "Failed to kill orphan agent PID %d: %s", agent_pid, e)
-                    # Clean up stale data and mark task as failed
-                    db.cleanup_task_data(task_id)
-                    db.update_task_status(task_id, "failed")
-                    self.log.info("Recovered orphaned task: %s", task_id)
-                    recovered += 1
-            finally:
-                db.close()
-        if recovered:
-            self.log.info("Conductor recovered %d orphaned tasks", recovered)
-        return recovered
+        projects = [{"db_path": p.db_path, "name": p.name} for p in self.projects]
+
+        def _repo_factory(db_path):
+            db = StateDB(db_path)
+            db.connect()
+            return TaskRepository(db)
+
+        return self._recovery_service.recover_all(projects, task_repo_factory=_repo_factory)
 
     def _handle_signal(self, signum, frame):
         sig_name = signal.Signals(signum).name
@@ -662,24 +635,21 @@ class Conductor:
 
     def _discover_and_submit(self):
         """从 GitHub Issues 自动发现并提交需求"""
-        try:
-            from .pm_discover import discover_github_issues, submit_issue_as_task, mark_issue_submitted
+        from .persistence.task_repo import TaskRepository
 
-            for project in self.projects:
-                db = self._connect_db(project.db_path)
-                try:
-                    issues = discover_github_issues(
-                        repo_path=Path.cwd(),
-                        labels=self.pm_discover_labels,
-                    )
-                    for issue in issues:
-                        task_id = submit_issue_as_task(issue, db)
-                        if task_id:
-                            mark_issue_submitted(Path.cwd(), issue["number"])
-                            self.log.info("PM auto-discovered: GH #%d → %s",
-                                         issue["number"], task_id)
-                finally:
-                    db.close()
+        projects = [{"db_path": p.db_path, "name": p.name} for p in self.projects]
+
+        def _repo_factory(db_path):
+            db = StateDB(db_path)
+            db.connect()
+            return TaskRepository(db)
+
+        try:
+            self._discovery.discover_and_submit(
+                projects,
+                labels=self.pm_discover_labels,
+                task_repo_factory=_repo_factory,
+            )
         except Exception:
             self.log.debug("PM discovery skipped (gh CLI may not be available)")
 
