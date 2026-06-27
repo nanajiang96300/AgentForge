@@ -81,10 +81,20 @@ def _progress_html(db, task_id):
     )
 
 
-def create_dashboard_app(db_path: Path = None) -> Flask:
-    if db_path is None:
-        db_path = find_state_db()
+def create_dashboard_app(dashboard_service=None):
+    if dashboard_service is None:
+        from .services.dashboard_service import DashboardService
+        from .persistence.task_repo import TaskRepository
+        from .persistence.metrics_repo import MetricsRepository
+        from .persistence.escalation_repo import EscalationRepository
+        from .db import StateDB
+        db = StateDB(find_state_db())
+        db.connect()
+        dashboard_service = DashboardService(
+            TaskRepository(db), MetricsRepository(db), EscalationRepository(db)
+        )
 
+    db_path = find_state_db()  # Keep for legacy routes (index, commands)
     _here = Path(__file__).resolve().parent
     app = Flask(__name__,
                 template_folder=str(_here / "templates"),
@@ -224,145 +234,46 @@ def create_dashboard_app(db_path: Path = None) -> Flask:
 
     @app.route("/api/state")
     def api_state():
-        db = StateDB(db_path)
-        db.connect()
-        try:
-            pending = db.get_pending_tasks()
-            escalated = db.get_escalated_tasks()
-            row = db.conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE status = 'running'"
-            ).fetchone()
-            return jsonify({
-                "pending": len(pending),
-                "running": row[0] if row else 0,
-                "escalated": len(escalated),
-            })
-        finally:
-            db.close()
+        summary = dashboard_service.queue_summary()
+        return jsonify({
+            "pending": summary["pending_count"],
+            "running": summary["running_count"],
+            "escalated": summary["escalated_count"],
+        })
 
     @app.route("/api/status")
     def api_status():
-        db = StateDB(db_path)
+        task_id = request.args.get("task_id")
+        if task_id:
+            return jsonify(dashboard_service.task_progress(task_id))
+        summary = dashboard_service.queue_summary()
+        # queue_summary doesn't include completed/failed; query via repo
+        db_obj = dashboard_service._task_repo._db
         try:
-            db.connect()
-        except Exception:
-            return jsonify({"pending": 0, "running": 0, "completed": 0,
-                           "failed": 0, "escalated": 0})
-        try:
-            pending = len(db.get_pending_tasks())
-            row = db.conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE status = 'running'"
-            ).fetchone()
-            running = row[0] if row else 0
-            comp = db.conn.execute(
+            comp = db_obj.execute(
                 "SELECT COUNT(*) FROM tasks WHERE status = 'completed'"
             ).fetchone()
-            completed = comp[0] if comp else 0
-            fail = db.conn.execute(
+            fail = db_obj.execute(
                 "SELECT COUNT(*) FROM tasks WHERE status = 'failed'"
             ).fetchone()
-            failed = fail[0] if fail else 0
-            escalated = len(db.get_escalated_tasks())
-            return jsonify({
-                "pending": pending, "running": running,
-                "completed": completed, "failed": failed,
-                "escalated": escalated,
-            })
         except Exception:
-            return jsonify({"pending": 0, "running": 0, "completed": 0,
-                           "failed": 0, "escalated": 0})
-        finally:
-            db.close()
+            comp = fail = None
+        return jsonify({
+            "pending": summary["pending_count"],
+            "running": summary["running_count"],
+            "completed": comp[0] if comp else 0,
+            "failed": fail[0] if fail else 0,
+            "escalated": summary["escalated_count"],
+        })
 
     @app.route("/api/timeseries")
     def api_timeseries():
-        db = StateDB(db_path)
-        db.connect()
-        try:
-            token_rows = db.conn.execute(
-                """SELECT date(recorded_at) as day,
-                          SUM(input_tokens + output_tokens) as tokens,
-                          SUM(cost_usd) as cost, COUNT(*) as calls
-                   FROM agent_metrics
-                   WHERE recorded_at IS NOT NULL
-                     AND date(recorded_at) >= date('now', '-7 days')
-                   GROUP BY date(recorded_at) ORDER BY day ASC"""
-            ).fetchall()
-            task_rows = db.conn.execute(
-                """SELECT date(completed_at) as day,
-                          COUNT(*) as total,
-                          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as passed
-                   FROM tasks
-                   WHERE completed_at IS NOT NULL
-                     AND date(completed_at) >= date('now', '-7 days')
-                   GROUP BY date(completed_at) ORDER BY day ASC"""
-            ).fetchall()
-            return jsonify({
-                "token_trend": [
-                    {"date": r[0], "tokens": r[1] or 0,
-                     "cost": round(r[2] or 0, 4), "calls": r[3] or 0}
-                    for r in token_rows
-                ],
-                "pass_rate": [
-                    {"date": r[0], "total": r[1] or 0, "passed": r[2] or 0,
-                     "rate": round((r[2] or 0) * 100 / max(r[1] or 1, 1), 1)}
-                    for r in task_rows
-                ],
-            })
-        finally:
-            db.close()
+        days = request.args.get("days", 7, type=int)
+        return jsonify(dashboard_service.timeseries(days=days))
 
     @app.route("/api/workflow-dag")
     def api_workflow_dag():
-        db = StateDB(db_path)
-        db.connect()
-        try:
-            from .config.loader import find_workflow_yaml
-            wf_path = find_workflow_yaml()
-            if not wf_path or not wf_path.exists():
-                return jsonify({"nodes": [], "edges": [], "error": "No workflow found"})
-
-            from .engine import load_yaml
-            wf_def = load_yaml(wf_path)
-            steps = wf_def.get("workflow", {}).get("steps", [])
-
-            nodes = []
-            edges = []
-            for step in steps:
-                sid = step["id"]
-                agent = step.get("agent", "?")
-                nodes.append({"id": sid, "agent": agent, "status": "pending"})
-                deps = step.get("depends_on", [])
-                if isinstance(deps, str):
-                    deps = [deps]
-                for dep in deps:
-                    edges.append({"source": dep, "target": sid, "label": ""})
-
-            running_task = db.conn.execute(
-                "SELECT id FROM tasks WHERE status='running' LIMIT 1"
-            ).fetchone()
-            if running_task:
-                task_id = running_task[0]
-                step_rows = db.conn.execute(
-                    "SELECT DISTINCT step_id, status FROM step_results "
-                    "WHERE task_id=? ORDER BY id", (task_id,)
-                ).fetchall()
-                seen = set()
-                for r in step_rows:
-                    if r[0] not in seen:
-                        seen.add(r[0])
-                        for node in nodes:
-                            if node["id"] == r[0]:
-                                node["status"] = r[1]
-
-            return jsonify({
-                "nodes": nodes, "edges": edges,
-                "workflow_id": wf.get("id", "unknown"),
-            })
-        except Exception as e:
-            return jsonify({"nodes": [], "edges": [], "error": str(e)})
-        finally:
-            db.close()
+        return jsonify(dashboard_service.workflow_dag())
 
     @app.route("/health")
     def health():

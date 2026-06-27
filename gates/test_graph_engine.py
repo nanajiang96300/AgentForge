@@ -210,5 +210,62 @@ class TestYamlExport:
         assert "on_verdict_approved" in yaml_str
 
 
+# ── WorkflowTopology Interface ──
+
+
+class TestWorkflowTopology:
+    def test_entry_nodes(self):
+        from multiagent.core.graph_engine import WorkflowGraph, GraphNode
+        g = WorkflowGraph("test")
+        g.add_node(GraphNode(id="a", agent="pm"))
+        g.add_node(GraphNode(id="b", agent="dev"))
+        g.add_node(GraphNode(id="c", agent="test"))
+        g.add_edge("a", "b")
+        g.add_edge("b", "c")
+        assert g.entry_nodes() == ["a"]
+
+    def test_successors_and_predecessors(self):
+        from multiagent.core.graph_engine import WorkflowGraph, GraphNode
+        g = WorkflowGraph("test")
+        g.add_node(GraphNode(id="a", agent="pm"))
+        g.add_node(GraphNode(id="b", agent="dev"))
+        g.add_edge("a", "b")
+        assert g.successors_of("a") == ["b"]
+        assert g.predecessors_of("b") == ["a"]
+        assert g.successors_of("b") == []
+
+    def test_parallel_groups_diamond(self):
+        from multiagent.core.graph_engine import WorkflowGraph, GraphNode
+        g = WorkflowGraph("test")
+        g.add_node(GraphNode(id="start", agent="pm"))
+        g.add_node(GraphNode(id="left", agent="dev"))
+        g.add_node(GraphNode(id="right", agent="dev"))
+        g.add_node(GraphNode(id="end", agent="test"))
+        g.add_edge("start", "left")
+        g.add_edge("start", "right")
+        g.add_edge("left", "end")
+        g.add_edge("right", "end")
+        groups = g.parallel_groups()
+        left_right_group = [grp for grp in groups if "left" in grp and "right" in grp]
+        assert len(left_right_group) >= 1
+
+    def test_validate_valid_graph(self):
+        from multiagent.core.graph_engine import WorkflowGraph, GraphNode
+        g = WorkflowGraph("test")
+        g.add_node(GraphNode(id="a", agent="pm"))
+        g.add_node(GraphNode(id="b", agent="dev"))
+        g.add_edge("a", "b")
+        assert g.validate() == []
+
+    def test_validate_detects_orphan(self):
+        from multiagent.core.graph_engine import WorkflowGraph, GraphNode
+        g = WorkflowGraph("test")
+        g.add_node(GraphNode(id="a", agent="pm"))
+        g.add_node(GraphNode(id="b", agent="dev"))
+        # No edges → b is orphan
+        issues = g.validate()
+        assert len(issues) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

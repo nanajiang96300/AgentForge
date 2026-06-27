@@ -81,6 +81,7 @@ class StateDB:
             pass
 
     def insert_task(self, task: Task) -> bool:
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             try:
                 self.conn.execute("""INSERT INTO tasks (id, type, source, workflow_id, current_step,
@@ -92,6 +93,7 @@ class StateDB:
             except sqlite3.IntegrityError: return False
 
     def claim_pending_task(self, workflow_id: str) -> Optional[Task]:
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             row = self.conn.execute("""SELECT id, type, source, workflow_id, current_step, status,
                 retry_count, rejection_count, dedup_key, context, created_at, claimed_at, completed_at
@@ -110,6 +112,7 @@ class StateDB:
                     created_at=row[10], claimed_at=row[11], completed_at=row[12])
 
     def update_task_status(self, task_id: str, status: str, current_step: Optional[str] = None):
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             # Status guard: never downgrade from a terminal status
             row = self.conn.execute(
@@ -127,35 +130,41 @@ class StateDB:
             self.conn.commit()
 
     def increment_retry(self, task_id: str) -> int:
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             row = self.conn.execute("UPDATE tasks SET retry_count = retry_count + 1 WHERE id = ? RETURNING retry_count",
                                     (task_id,)).fetchone()
             self.conn.commit(); return row[0] if row else 0
 
     def increment_rejection(self, task_id: str) -> int:
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             row = self.conn.execute("UPDATE tasks SET rejection_count = rejection_count + 1 WHERE id = ? RETURNING rejection_count",
                                     (task_id,)).fetchone()
             self.conn.commit(); return row[0] if row else 0
 
     def set_task_context(self, task_id: str, context: dict):
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             self.conn.execute("UPDATE tasks SET context = ? WHERE id = ?",
                               (json.dumps(context), task_id)); self.conn.commit()
 
     def get_task(self, task_id: str) -> Optional[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         row = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None: return None
         cols = [d[1] for d in self.conn.execute("PRAGMA table_info(tasks)").fetchall()]
         return dict(zip(cols, row))
 
     def get_running_tasks(self) -> list[Task]:
+        # DEPRECATED: use persistence.TaskRepository instead
         return [Task(*row) for row in self.conn.execute(
             """SELECT id, type, source, workflow_id, current_step, status, retry_count,
                dedup_key, created_at, claimed_at, completed_at FROM tasks WHERE status = 'running'""")]
 
     def record_step(self, task_id, step_id, agent, status, output=None, error=None,
                     retry_count=0, started_at=None, completed_at=None, adapter_name="claude-code"):
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             self.conn.execute("""INSERT INTO step_results (task_id, step_id, agent, adapter, status,
                 output, error, retry_count, started_at, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -164,16 +173,19 @@ class StateDB:
             self.conn.commit()
 
     def heartbeat(self, task_id, step_id, agent_pid):
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             self.conn.execute("INSERT OR REPLACE INTO heartbeat (task_id, step_id, agent_pid, last_beat) VALUES (?,?,?,?)",
                               (task_id, step_id, agent_pid, now_iso())); self.conn.commit()
 
     def get_lost_agents(self, heartbeat_timeout=60) -> list[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         rows = self.conn.execute("""SELECT task_id, step_id, agent_pid, last_beat FROM heartbeat
             WHERE datetime(last_beat) < datetime(?, ?)""", (now_iso(), f"-{heartbeat_timeout} seconds"))
         return [{"task_id": r[0], "step_id": r[1], "agent_pid": r[2], "last_beat": r[3]} for r in rows]
 
     def record_metrics(self, metrics: AgentMetrics):
+        # DEPRECATED: use persistence.TaskRepository instead
         with self._write_lock:
             self.conn.execute("""INSERT INTO agent_metrics (task_id, step_id, agent, adapter, model,
                 duration_ms, duration_api_ms, input_tokens, output_tokens, cache_read_tokens,
@@ -186,6 +198,7 @@ class StateDB:
     # ── Escalations (Phase 4: Conductor human notification) ──
 
     def record_escalation(self, task_id: str, step_id: str, reason: str, context: Optional[dict] = None) -> int:
+        # DEPRECATED: use persistence.TaskRepository instead
         """记录升级事件，返回 escalation ID"""
         with self._write_lock:
             cur = self.conn.execute(
@@ -196,6 +209,7 @@ class StateDB:
             return cur.lastrowid
 
     def get_pending_escalations(self) -> list[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         """获取所有未处理的升级事件"""
         rows = self.conn.execute(
             """SELECT id, task_id, step_id, reason, context, status, created_at
@@ -204,6 +218,7 @@ class StateDB:
                 for r in rows]
 
     def resolve_escalation(self, escalation_id: int, resolution: str) -> bool:
+        # DEPRECATED: use persistence.TaskRepository instead
         """处理升级事件（accept/retry/reject）"""
         with self._write_lock:
             self.conn.execute(
@@ -213,6 +228,7 @@ class StateDB:
             return True
 
     def search_tasks(self, keyword: str, status: str = None) -> list[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         """Search tasks by keyword in requirements text, optionally filtered by status."""
         query = """SELECT id, type, source, workflow_id, current_step, status,
                    retry_count, rejection_count, dedup_key, context,
@@ -243,6 +259,7 @@ class StateDB:
         return results
 
     def get_pending_tasks(self) -> list[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         """获取所有状态为 pending 的任务（Conductor 用）"""
         rows = self.conn.execute(
             """SELECT id, type, source, workflow_id, current_step, status, retry_count,
@@ -253,6 +270,7 @@ class StateDB:
         return [dict(zip(cols, r)) for r in rows]
 
     def get_escalated_tasks(self) -> list[dict]:
+        # DEPRECATED: use persistence.TaskRepository instead
         """获取所有状态为 escalated 的任务"""
         rows = self.conn.execute(
             """SELECT id, type, source, workflow_id, current_step, status, retry_count,
@@ -263,6 +281,7 @@ class StateDB:
         return [dict(zip(cols, r)) for r in rows]
 
     def get_metrics_summary(self, agent: Optional[str] = None) -> dict:
+        # DEPRECATED: use persistence.TaskRepository instead
         if agent:
             row = self.conn.execute("""SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens),
                 SUM(cost_usd), AVG(duration_ms) FROM agent_metrics WHERE agent = ?""", (agent,)).fetchone()
@@ -283,6 +302,7 @@ class StateDB:
     }
 
     def prune_step_results(self, days: int = None):
+        # DEPRECATED: use persistence.TaskRepository instead
         """Delete step_results older than `days` (default 30)."""
         if days is None:
             days = self.DEFAULT_RETENTION_DAYS["step_results"]
@@ -294,6 +314,7 @@ class StateDB:
             self.conn.commit()
 
     def prune_agent_metrics(self, days: int = None):
+        # DEPRECATED: use persistence.TaskRepository instead
         """Delete agent_metrics older than `days` (default 90)."""
         if days is None:
             days = self.DEFAULT_RETENTION_DAYS["agent_metrics"]
@@ -305,6 +326,7 @@ class StateDB:
             self.conn.commit()
 
     def prune_heartbeat(self, days: int = None):
+        # DEPRECATED: use persistence.TaskRepository instead
         """Delete heartbeat rows older than `days` (default 7)."""
         if days is None:
             days = self.DEFAULT_RETENTION_DAYS["heartbeat"]
@@ -315,6 +337,7 @@ class StateDB:
             self.conn.commit()
 
     def cleanup_task_data(self, task_id: str):
+        # DEPRECATED: use persistence.TaskRepository instead
         """Remove step_results, agent_metrics, and heartbeat for a task."""
         with self._write_lock:
             for table in ("step_results", "agent_metrics", "heartbeat"):
@@ -327,11 +350,30 @@ class StateDB:
             self.conn.execute("VACUUM")
 
     def prune_all(self, retention_days: dict = None):
+        # DEPRECATED: use persistence.TaskRepository instead
         """Prune all tables. Called periodically or on connect."""
         r = retention_days or self.DEFAULT_RETENTION_DAYS
         self.prune_step_results(r.get("step_results", 30))
         self.prune_agent_metrics(r.get("agent_metrics", 90))
         self.prune_heartbeat(r.get("heartbeat", 7))
+
+    def execute(self, sql: str, params: tuple = ()):
+        """Read-only query shortcut. Returns cursor for .fetchone()/.fetchall()."""
+        return self.conn.execute(sql, params)
+
+    def execute_write(self, sql: str, params: tuple = ()):
+        """Write operation with lock + auto-commit. Returns cursor."""
+        with self._write_lock:
+            cur = self.conn.execute(sql, params)
+            self.conn.commit()
+            return cur
+
+    def execute_many(self, sql: str, params_list: list):
+        """Batch write with lock + auto-commit."""
+        with self._write_lock:
+            cur = self.conn.executemany(sql, params_list)
+            self.conn.commit()
+            return cur
 
     def close(self):
         if self.conn: self.conn.close()
