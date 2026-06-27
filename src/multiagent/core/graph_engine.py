@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
+from ..interfaces import WorkflowTopology, StepConditionEvaluator
+
 _log = logging.getLogger("multiagent.graph")
 
 
@@ -33,17 +35,19 @@ class GraphEdge:
     label: str = ""       # Human-readable label for visualization
 
 
-class WorkflowGraph:
+class WorkflowGraph(WorkflowTopology):
     """A directed graph defining agent workflow topology.
 
     Converts to/from workflow YAML format compatible with WorkflowOrchestrator.
     """
 
-    def __init__(self, graph_id: str = "custom", description: str = ""):
+    def __init__(self, graph_id: str = "custom", description: str = "",
+                 evaluator: StepConditionEvaluator = None):
         self.graph_id = graph_id
         self.description = description
         self.nodes: dict[str, GraphNode] = {}
         self.edges: list[GraphEdge] = []
+        self._evaluator = evaluator
 
     # ── Graph Building ──
 
@@ -61,6 +65,23 @@ class WorkflowGraph:
             del self.nodes[node_id]
         self.edges = [e for e in self.edges
                       if e.source != node_id and e.target != node_id]
+
+    # ── Condition Evaluation ──
+
+    def set_evaluator(self, evaluator: StepConditionEvaluator):
+        """Set the condition evaluator for conditional edges."""
+        self._evaluator = evaluator
+
+    def evaluate_edge(self, edge: GraphEdge, context: dict) -> bool:
+        """Evaluate a conditional edge against context."""
+        if not edge.condition or not self._evaluator:
+            return True
+        return self._evaluator.evaluate(edge.condition, context)
+
+    def get_active_successors(self, node_id: str, context: dict) -> list[str]:
+        """Get successor nodes whose conditional edges pass evaluation."""
+        return [e.target for e in self.get_successors(node_id)
+                if self.evaluate_edge(e, context)]
 
     # ── Graph Analysis ──
 
@@ -81,6 +102,70 @@ class WorkflowGraph:
     def get_predecessors(self, node_id: str) -> list[GraphEdge]:
         """Get incoming edges to a node."""
         return [e for e in self.edges if e.target == node_id]
+
+    # ── WorkflowTopology Interface ──
+
+    def entry_nodes(self) -> list[str]:
+        """Nodes with no incoming edges (WorkflowTopology interface)."""
+        targets = {e.target for e in self.edges}
+        return [nid for nid in self.nodes if nid not in targets]
+
+    def successors_of(self, node_id: str) -> list[str]:
+        """IDs of nodes that directly follow node_id."""
+        return [e.target for e in self.edges if e.source == node_id]
+
+    def predecessors_of(self, node_id: str) -> list[str]:
+        """IDs of nodes that directly precede node_id."""
+        return [e.source for e in self.edges if e.target == node_id]
+
+    def parallel_groups(self) -> list[list[str]]:
+        """Return groups of nodes that can execute in parallel."""
+        deps = {nid: set() for nid in self.nodes}
+        for e in self.edges:
+            deps[e.target].add(e.source)
+            deps[e.target].update(deps.get(e.source, set()))
+        groups = []
+        remaining = set(self.nodes.keys())
+        while remaining:
+            group = []
+            for nid in list(remaining):
+                if all(nid not in deps.get(other, set()) and
+                       other not in deps.get(nid, set())
+                       for other in group):
+                    group.append(nid)
+            for nid in group:
+                remaining.discard(nid)
+            if group:
+                groups.append(group)
+        return groups
+
+    def validate(self) -> list[str]:
+        """Topological validation. Returns list of issues (empty = valid)."""
+        issues = []
+        if len(self.nodes) > 1:
+            entry = self.entry_nodes()
+            if not entry:
+                issues.append("No entry nodes found")
+            exits = self.get_exit_nodes()
+            if not exits:
+                issues.append("No exit nodes found")
+        # Detect orphan nodes (not connected to any edge)
+        connected = {e.source for e in self.edges} | {e.target for e in self.edges}
+        orphans = [nid for nid in self.nodes if nid not in connected]
+        for nid in orphans:
+            issues.append(f"Orphan node '{nid}' not connected to any edge")
+        for e in self.edges:
+            if e.source not in self.nodes:
+                issues.append(f"Edge source '{e.source}' not a known node")
+            if e.target not in self.nodes:
+                issues.append(f"Edge target '{e.target}' not a known node")
+            if e.source == e.target:
+                issues.append(f"Self-loop on node '{e.source}'")
+            if self._evaluator and e.condition:
+                ok, err = self._evaluator.validate(e.condition)
+                if not ok:
+                    issues.append(f"Invalid condition on {e.source}->{e.target}: {err}")
+        return issues
 
     def topological_order(self) -> list[str]:
         """Return nodes in topological order (Kahn's algorithm)."""
