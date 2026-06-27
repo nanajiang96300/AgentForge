@@ -71,3 +71,80 @@ class ProgressCalculator(ABC):
 
 # Type aliases for duck-typing compatibility
 NotifierFunc = Callable[[str, str, str, dict], None]
+
+
+class StepConditionEvaluator(ABC):
+    """Evaluate conditions on step outputs and task context.
+
+    Supports: ==, !=, >, <, >=, <=, in, not in, and, or, not
+    Example: 'verdict == "approved" and complexity != "high"'
+    """
+
+    @abstractmethod
+    def evaluate(self, condition: str, context: dict) -> bool:
+        """Evaluate condition expression against context. Returns True/False."""
+        ...
+
+    @abstractmethod
+    def validate(self, condition: str) -> tuple:
+        """Validate condition syntax. Returns (is_valid: bool, error: str|None)."""
+        ...
+
+
+class RoleTemplateLoader(ABC):
+    """Load and resolve role templates to AgentConfig.
+
+    Reserved for Phase 8c role template system.
+    """
+
+    @abstractmethod
+    def list_builtins(self) -> list[str]:
+        """List built-in template names."""
+        ...
+
+    @abstractmethod
+    def list_user_templates(self) -> list[str]:
+        """List user-defined template names."""
+        ...
+
+    @abstractmethod
+    def load(self, name: str) -> "AgentConfig":
+        """Load a template by name, resolving inheritance and defaults."""
+        ...
+
+    @abstractmethod
+    def validate_template(self, name: str) -> list[str]:
+        """Validate a template. Returns list of issues (empty = valid)."""
+        ...
+
+
+class WorkflowTopology(ABC):
+    """Query workflow graph topology independently of execution.
+
+    Reserved for Phase 8c multi-agent collaboration modes.
+    """
+
+    @abstractmethod
+    def entry_nodes(self) -> list[str]:
+        """Nodes with no incoming edges."""
+        ...
+
+    @abstractmethod
+    def successors_of(self, node_id: str) -> list[str]:
+        """IDs of nodes that directly follow node_id."""
+        ...
+
+    @abstractmethod
+    def predecessors_of(self, node_id: str) -> list[str]:
+        """IDs of nodes that directly precede node_id."""
+        ...
+
+    @abstractmethod
+    def parallel_groups(self) -> list[list[str]]:
+        """Return groups of nodes that can execute in parallel."""
+        ...
+
+    @abstractmethod
+    def validate(self) -> list[str]:
+        """Topological validation. Returns list of issues (empty = valid)."""
+        ...
