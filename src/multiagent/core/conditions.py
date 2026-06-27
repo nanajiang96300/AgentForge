@@ -49,6 +49,26 @@ class _Evaluator(ast.NodeVisitor):
                     )
                 self.push(op_func(left, right))
 
+    def visit_Attribute(self, node):
+        # Resolve dotted paths like test_verify.output.verdict
+        parts = []
+        n = node
+        while isinstance(n, ast.Attribute):
+            parts.append(n.attr)
+            n = n.value
+        if isinstance(n, ast.Name):
+            parts.append(n.id)
+        parts.reverse()
+        # Traverse context dict following parts
+        value = self._ctx
+        for part in parts:
+            if isinstance(value, dict):
+                value = value.get(part, "")
+            else:
+                value = ""
+                break
+        self.push(value)
+
     def visit_Name(self, node):
         if node.id in self._ctx:
             self.push(self._ctx[node.id])

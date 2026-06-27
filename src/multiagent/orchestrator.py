@@ -17,6 +17,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from .core.conditions import ConditionEvaluator
 from .db import StateDB, Task, now_iso
 from .engine import AgentSpawner, StepResult, StepStatus, load_yaml
 from .interfaces import StepHook  # noqa: F401
@@ -64,7 +65,11 @@ class WorkflowOrchestrator:
     # is force-escalated. Each "execution" = one spawn+monitor cycle.
     MAX_TOTAL_STEP_EXECUTIONS = 50
 
-    def __init__(self, db: StateDB, spawner: AgentSpawner, workflow_path: Path):
+    def __init__(self, db: StateDB, spawner: AgentSpawner, workflow_path: Path, evaluator=None):
+        if evaluator is None:
+            from .core.conditions import ConditionEvaluator
+            evaluator = ConditionEvaluator()
+        self._evaluator = evaluator
         self.db = db
         self.spawner = spawner
         self.workflow_path = workflow_path
@@ -127,7 +132,7 @@ class WorkflowOrchestrator:
                     continue
                 # 检查依赖步骤的输出是否满足条件
                 if dep_step.condition:
-                    if not self._check_condition(dep_step.condition, prev_result):
+                    if not self._evaluator.evaluate(dep_step.condition, prev_result):
                         deps_met = False
                         break
             if deps_met:
@@ -135,7 +140,7 @@ class WorkflowOrchestrator:
                 if step.condition:
                     ctx = {"task": task}
                     ctx.update(self._step_results)
-                    if not self._check_condition(step.condition, ctx):
+                    if not self._evaluator.evaluate(step.condition, ctx):
                         step.state = StepState.SKIPPED
                         self._step_results[step.id] = {"_state": "skipped"}
                         continue
@@ -304,26 +309,6 @@ class WorkflowOrchestrator:
             self.db.update_task_status(task.id, "escalated", step.id)
             self._fire_hook("on_escalation", task.id, step.id, f"Max rejections ({max_rejections}) reached")
             return False
-
-    def _check_condition(self, condition: str, context: dict) -> bool:
-        """检查条件表达式（简化版，支持 output.field == 'value'）"""
-        try:
-            # 只支持简单的 == and !=
-            for op in ["==", "!="]:
-                if op in condition:
-                    left, right = condition.split(op)
-                    left = left.strip(); right = right.strip().strip("'\"")
-                    # 解析 left: e.g. "test_verify.output.verdict"
-                    parts = left.split(".")
-                    value = context
-                    for p in parts:
-                        if isinstance(value, dict):
-                            value = value.get(p, "")
-                    if op == "==": return str(value) == right
-                    if op == "!=": return str(value) != right
-            return True
-        except Exception:
-            return True  # 出错时放行
 
     def _execute_parallel(self, task: Task, steps: list[WorkflowStep]) -> list:
         """并行执行多个独立步骤，返回结果列表"""

@@ -104,10 +104,11 @@ def test_rejection_loop():
 
 def test_condition_check():
     print("[TEST 6] Condition evaluation...", end=" ", flush=True)
-    orch = WorkflowOrchestrator(None, None, WF_PATH)
-    assert orch._check_condition("test_verify.output.verdict == 'approved'",
+    from multiagent.core.conditions import ConditionEvaluator
+    orch = WorkflowOrchestrator(None, None, WF_PATH, evaluator=ConditionEvaluator())
+    assert orch._evaluator.evaluate("test_verify.output.verdict == 'approved'",
                                   {"test_verify": {"output": {"verdict": "approved"}}})
-    assert not orch._check_condition("test_verify.output.verdict == 'approved'",
+    assert not orch._evaluator.evaluate("test_verify.output.verdict == 'approved'",
                                       {"test_verify": {"output": {"verdict": "rejected"}}})
     print("✅ PASS")
 
