@@ -156,19 +156,25 @@ class TaskRepository:
 
     def increment_retry(self, task_id: str) -> int:
         """Increment retry_count and return the new value."""
-        row = self._db.execute_write(
+        self._db.execute_write(
             "UPDATE tasks SET retry_count = retry_count + 1 "
-            "WHERE id = ? RETURNING retry_count",
+            "WHERE id = ?",
             (task_id,),
+        )
+        row = self._db.execute(
+            "SELECT retry_count FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
         return row[0] if row else 0
 
     def increment_rejection(self, task_id: str) -> int:
         """Increment rejection_count and return the new value."""
-        row = self._db.execute_write(
+        self._db.execute_write(
             "UPDATE tasks SET rejection_count = rejection_count + 1 "
-            "WHERE id = ? RETURNING rejection_count",
+            "WHERE id = ?",
             (task_id,),
+        )
+        row = self._db.execute(
+            "SELECT rejection_count FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
         return row[0] if row else 0
 

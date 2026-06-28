@@ -22,6 +22,9 @@ from flask import Flask, jsonify, request, render_template
 from .db import StateDB
 from .core.progress import calculate_task_progress
 from .config.loader import find_state_db
+from .persistence.task_repo import TaskRepository
+from .persistence.metrics_repo import MetricsRepository
+from .persistence.escalation_repo import EscalationRepository
 
 
 def _token_fmt(n):
@@ -37,7 +40,7 @@ def _badge(status):
 
 
 def _pipeline_html(db, task_id):
-    rows = db.conn.execute(
+    rows = db.execute(
         "SELECT DISTINCT step_id, status FROM step_results "
         "WHERE task_id = ? ORDER BY id", (task_id,)
     ).fetchall()
@@ -107,18 +110,19 @@ def create_dashboard_app(dashboard_service=None):
         db = StateDB(db_path)
         db.connect()
         try:
-            pending = db.get_pending_tasks()
-            escalated = db.get_escalated_tasks()
-            row = db.conn.execute(
+            task_repo = TaskRepository(db)
+            pending = task_repo.get_pending()
+            escalated = task_repo.get_escalated()
+            row = db.execute(
                 "SELECT COUNT(*) FROM tasks WHERE status = 'running'"
             ).fetchone()
             running_count = row[0] if row else 0
-            comp = db.conn.execute(
+            comp = db.execute(
                 "SELECT COUNT(*) FROM tasks WHERE status = 'completed'"
             ).fetchone()
             completed_count = comp[0] if comp else 0
 
-            metrics_row = db.conn.execute(
+            metrics_row = db.execute(
                 "SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), "
                 "SUM(cost_usd) FROM agent_metrics"
             ).fetchone()
@@ -132,7 +136,7 @@ def create_dashboard_app(dashboard_service=None):
                     "total_cost_usd": metrics_row[3] or 0,
                 }
 
-            task_rows = db.conn.execute(
+            task_rows = db.execute(
                 "SELECT id, type, status, current_step, retry_count, "
                 "rejection_count, created_at FROM tasks "
                 "ORDER BY created_at DESC LIMIT 50"
@@ -144,7 +148,7 @@ def create_dashboard_app(dashboard_service=None):
             in_flight = []
             for t in tasks:
                 if t["status"] in ("running", "assigned"):
-                    m = db.conn.execute(
+                    m = db.execute(
                         "SELECT SUM(input_tokens), SUM(output_tokens), "
                         "SUM(cost_usd) FROM agent_metrics WHERE task_id = ?",
                         (t["id"],)

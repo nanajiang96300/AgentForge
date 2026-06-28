@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from ..db import StateDB, now_iso
+from ..persistence.task_repo import TaskRepository
 
 _log = logging.getLogger("multiagent.checkpoint")
 
@@ -20,15 +21,16 @@ class CheckpointManager:
 
     def __init__(self, db: StateDB):
         self.db = db
+        self._task_repo = TaskRepository(db)
 
     def save(self, task_id: str, label: str = "") -> str:
         """Save current task state as a checkpoint. Returns checkpoint_id."""
-        task = self.db.get_task(task_id)
+        task = self._task_repo.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
 
         # Capture step results
-        steps = self.db.conn.execute(
+        steps = self.db.execute(
             "SELECT step_id, agent, status, output, error FROM step_results "
             "WHERE task_id = ? ORDER BY id",
             (task_id,)
@@ -51,19 +53,18 @@ class CheckpointManager:
         }
 
         # Store in workflow_state table with checkpoint prefix
-        self.db.conn.execute(
+        self.db.execute_write(
             "INSERT OR REPLACE INTO workflow_state (workflow_id, status, metadata, updated_at) "
             "VALUES (?, 'checkpoint', ?, ?)",
             (checkpoint_id, json.dumps(data), now_iso())
         )
-        self.db.conn.commit()
 
         _log.info("Checkpoint saved: %s (%d steps)", checkpoint_id, len(steps))
         return checkpoint_id
 
     def restore(self, checkpoint_id: str) -> dict | None:
         """Load a checkpoint. Returns checkpoint data or None."""
-        row = self.db.conn.execute(
+        row = self.db.execute(
             "SELECT metadata FROM workflow_state WHERE workflow_id = ? AND status = 'checkpoint'",
             (checkpoint_id,)
         ).fetchone()
@@ -78,13 +79,13 @@ class CheckpointManager:
     def list_checkpoints(self, task_id: str = None) -> list[dict]:
         """List checkpoints, optionally filtered by task."""
         if task_id:
-            rows = self.db.conn.execute(
+            rows = self.db.execute(
                 "SELECT workflow_id, metadata, updated_at FROM workflow_state "
                 "WHERE status = 'checkpoint' AND workflow_id LIKE ? ORDER BY updated_at DESC",
                 (f"ckpt-{task_id}%",)
             ).fetchall()
         else:
-            rows = self.db.conn.execute(
+            rows = self.db.execute(
                 "SELECT workflow_id, metadata, updated_at FROM workflow_state "
                 "WHERE status = 'checkpoint' ORDER BY updated_at DESC LIMIT 50"
             ).fetchall()
@@ -99,9 +100,8 @@ class CheckpointManager:
 
     def delete(self, checkpoint_id: str) -> bool:
         """Delete a checkpoint."""
-        self.db.conn.execute(
+        self.db.execute_write(
             "DELETE FROM workflow_state WHERE workflow_id = ? AND status = 'checkpoint'",
             (checkpoint_id,)
         )
-        self.db.conn.commit()
         return True

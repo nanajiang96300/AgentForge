@@ -13,7 +13,7 @@ Usage:
 import sys
 from pathlib import Path
 
-from ..services.role_service import RoleService
+from ..services.role_service import RoleService, RoleTemplateService
 from ..config.loader import find_roles_yaml
 
 
@@ -36,12 +36,28 @@ def cmd_role_create(argv):
     parser.add_argument("--personality", default="", help="Behavioral style hint")
     parser.add_argument("--no-skill", action="store_true", help="Skip SKILL.md generation")
     parser.add_argument("--no-prompt", action="store_true", help="Skip prompt.md generation")
+    parser.add_argument("--from-template", default=None,
+        help="Create from built-in template (architect, security-auditor, code-reviewer, performance-optimizer)")
     args = parser.parse_args(argv)
 
     name = args.name.strip().lower()
     if not name:
         print("Error: Role name is required")
         return 1
+
+    # If --from-template is used, delegate to RoleTemplateService
+    if args.from_template:
+        try:
+            from ..services.role_service import RoleTemplateService
+            svc = RoleTemplateService()
+            config = svc.create_from_template(args.from_template, name)
+            print(f"\n✅ Role '{name}' created from template '{args.from_template}'")
+            print(f"   Description: {config.description}")
+            print(f"   Output fields: {config.output_required}")
+            return 0
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
 
     try:
         config = RoleService.create_from_template(
@@ -224,6 +240,63 @@ def cmd_role_validate(argv):
     return 0
 
 
+def cmd_role_list_templates(argv):
+    """List available role templates (built-in + user-defined)."""
+    svc = RoleTemplateService()
+    builtins = svc.list_builtins()
+
+    if not builtins:
+        print("No templates available.")
+        return 0
+
+    print(f"\nAvailable Role Templates ({len(builtins)}):")
+    print(f"{'Name':<24} {'Description'}")
+    print("-" * 80)
+    for tpl_name in builtins:
+        try:
+            data = svc.load(tpl_name)
+            desc = data.get("description", "")[:52]
+            if len(data.get("description", "")) > 52:
+                desc += "..."
+        except ValueError:
+            desc = "(could not load)"
+        print(f"{tpl_name:<24} {desc}")
+    print()
+    return 0
+
+
+def cmd_role_show_template(argv):
+    """Show details for a specific template."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="multiagent role show-template", description="Show template details")
+    parser.add_argument("name", help="Template name")
+    args = parser.parse_args(argv)
+
+    svc = RoleTemplateService()
+    try:
+        data = svc.load(args.name)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(f"\nTemplate: {args.name}")
+    print(f"  Description:    {data.get('description', '(not set)')}")
+    print(f"  Model:          {data.get('model', '(not set)')}")
+    print(f"  Personality:    {data.get('personality', '(not set)')}")
+    print(f"  Timeout:        {data.get('timeout', 600)}s")
+    print(f"  Session:        {data.get('session', 'per-issue')}")
+    print(f"  Skill:          {data.get('skill', '(not set)')}")
+    print(f"  Memory:         {data.get('memory', '(not set)')}")
+    print(f"  Output Required: {data.get('output_required', [])}")
+    perms = data.get('permissions', {})
+    print(f"  Permissions:")
+    print(f"    Write: {perms.get('write', [])}")
+    print(f"    Read:  {perms.get('read', [])}")
+    print(f"    Deny:  {perms.get('deny', [])}")
+    print()
+    return 0
+
+
 def main():
     # Handle both: multiagent role <cmd>  and direct import
     if len(sys.argv) >= 2 and sys.argv[1] == "role":
@@ -232,7 +305,7 @@ def main():
         cmd_idx = 1
 
     if len(sys.argv) <= cmd_idx:
-        print("Usage: multiagent role <create|list|show|delete|clone|validate> [args]")
+        print("Usage: multiagent role <create|list|show|delete|clone|validate|list-templates|show-template> [args]")
         return
 
     cmd = sys.argv[cmd_idx]
@@ -250,9 +323,13 @@ def main():
         return cmd_role_clone(args)
     elif cmd == "validate":
         return cmd_role_validate(args)
+    elif cmd == "list-templates":
+        return cmd_role_list_templates(args)
+    elif cmd == "show-template":
+        return cmd_role_show_template(args)
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: multiagent role <create|list|show|delete|clone|validate> [args]")
+        print("Usage: multiagent role <create|list|show|delete|clone|validate|list-templates|show-template> [args]")
         return 1
 
 

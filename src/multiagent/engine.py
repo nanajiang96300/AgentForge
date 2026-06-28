@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional
 from .db import StateDB, Task, AgentMetrics, now_iso
 from .adapters import AgentAdapter, create as create_adapter
+from .persistence.task_repo import TaskRepository
+from .persistence.metrics_repo import MetricsRepository
 
 _log = logging.getLogger("multiagent.engine")
 
@@ -37,6 +39,9 @@ class AgentSpawner:
         self._prompt_search_paths = prompt_search_paths or [
             adapter.project_root / "architectures" / "dev-test-loop" / "prompts",
         ]
+        # Repository references (created from db)
+        self._task_repo = TaskRepository(db)
+        self._metrics_repo = MetricsRepository(db)
 
     def spawn(self, task, step, work_dir=None):
         agent_config = self.roles.get("agents",{}).get(step["agent"],{})
@@ -47,9 +52,9 @@ class AgentSpawner:
         cwd = str(work_dir or adapter.project_root)
         p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, start_new_session=True)
-        self.db.heartbeat(task.id, step["id"], p.pid)
-        self.db.record_step(task.id, step["id"], step["agent"], StepStatus.RUNNING.value,
-                            started_at=now_iso(), adapter_name=adapter.name())
+        self._task_repo.heartbeat(task.id, step["id"], p.pid)
+        self._task_repo.record_step(task.id, step["id"], step["agent"], StepStatus.RUNNING.value,
+                                    started_at=now_iso(), adapter_name=adapter.name())
         return p
 
     def _build_prompt(self, task, step):
@@ -114,25 +119,26 @@ class AgentSpawner:
         except subprocess.TimeoutExpired:
             result.status = StepStatus.TIMED_OUT; result.completed_at = now_iso()
             self._kill_process(process)
-        self.db.record_step(task.id, step["id"], step["agent"], result.status.value,
-                            output=result.output, error=result.error,
-                            retry_count=result.retry_count, started_at=result.started_at,
-                            completed_at=result.completed_at, adapter_name=adapter.name())
+        self._task_repo.record_step(task.id, step["id"], step["agent"], result.status.value,
+                                    output=result.output, error=result.error,
+                                    retry_count=result.retry_count, started_at=result.started_at,
+                                    completed_at=result.completed_at, adapter_name=adapter.name())
         if raw: self._capture_metrics(task, step, result, raw, adapter.name())
         return result
 
     def _capture_metrics(self, task, step, result, raw, adapter_name):
         u = raw.get("usage",{}); mu = raw.get("modelUsage",{})
         fm = next(iter(mu.values()),{}) if mu else {}
-        m = AgentMetrics(task_id=task.id, step_id=step["id"], agent=step["agent"],
-            adapter=adapter_name, model=fm.get("model", raw.get("model","unknown")),
-            duration_ms=raw.get("duration_ms",0), duration_api_ms=raw.get("duration_api_ms",0),
-            input_tokens=u.get("input_tokens",0) or fm.get("inputTokens",0),
-            output_tokens=u.get("output_tokens",0) or fm.get("outputTokens",0),
-            cache_read_tokens=u.get("cache_read_input_tokens",0) or fm.get("cacheReadInputTokens",0),
-            cost_usd=raw.get("total_cost_usd",0) or fm.get("costUSD",0.0),
-            num_turns=raw.get("num_turns",1), ttft_ms=raw.get("ttft_ms",0), status=result.status.value)
-        self.db.record_metrics(m)
+        model = fm.get("model", raw.get("model","unknown"))
+        input_tokens = u.get("input_tokens",0) or fm.get("inputTokens",0)
+        output_tokens = u.get("output_tokens",0) or fm.get("outputTokens",0)
+        cost_usd = raw.get("total_cost_usd",0) or fm.get("costUSD",0.0)
+        duration_ms = raw.get("duration_ms",0)
+        self._metrics_repo.record(
+            task_id=task.id, step_id=step["id"], agent=step["agent"],
+            adapter=adapter_name, model=model,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            cost_usd=cost_usd, duration_ms=duration_ms, status=result.status.value)
 
     def validate_output(self, result, required_fields):
         for f in required_fields:
@@ -205,7 +211,7 @@ class AgentSpawner:
         Called by Conductor to clean up orphaned agent processes.
         Returns the number of agents killed.
         """
-        lost = self.db.get_lost_agents(heartbeat_timeout)
+        lost = self._task_repo.get_lost_agents(heartbeat_timeout)
         killed = 0
         for entry in lost:
             pid = entry.get("agent_pid")

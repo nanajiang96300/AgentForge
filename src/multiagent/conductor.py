@@ -24,6 +24,8 @@ from typing import Optional, Callable
 
 from .db import StateDB, Task, now_iso
 from .core.progress import calculate_task_progress, progress_bar
+from .persistence.task_repo import TaskRepository
+from .persistence.escalation_repo import EscalationRepository
 
 _DEFAULT_POLL_INTERVAL = 5
 _log = logging.getLogger("multiagent.conductor")
@@ -164,12 +166,12 @@ class Conductor:
         """返回 Conductor 运行时状态"""
         projects_status = []
         for proj in self.projects:
-            db = self._connect_db(proj.db_path)
+            db, task_repo, esc_repo = self._connect_repos(proj.db_path)
             try:
-                pending = db.get_pending_tasks()
-                escalated = db.get_escalated_tasks()
-                pend_esc = db.get_pending_escalations()
-                rows = db.conn.execute(
+                pending = task_repo.get_pending()
+                escalated = task_repo.get_escalated()
+                pend_esc = esc_repo.get_pending()
+                rows = db.execute(
                     "SELECT COUNT(*) FROM tasks WHERE status = 'running'"
                 ).fetchone()
                 projects_status.append({
@@ -205,16 +207,16 @@ class Conductor:
                 try:
                     for project in self.projects:
                         if project.name == inf.project_name:
-                            db_proj = self._connect_db(project.db_path)
+                            db_proj, task_repo_proj, _esc_repo = self._connect_repos(project.db_path)
                             try:
-                                t = db_proj.get_task(task_id)
+                                t = task_repo_proj.get_task(task_id)
                                 if t:
                                     progress["status"] = t.get("status", "?")
                                     progress["current_step"] = t.get("current_step", "?")
                                     progress["retry_count"] = t.get("retry_count", 0)
                                     progress["rejection_count"] = t.get("rejection_count", 0)
                                 # Get latest step result
-                                row = db_proj.conn.execute(
+                                row = db_proj.execute(
                                     "SELECT step_id, agent, status FROM step_results "
                                     "WHERE task_id = ? ORDER BY id DESC LIMIT 1",
                                     (task_id,)
@@ -231,7 +233,7 @@ class Conductor:
                                     progress["pct"] = 0
                                     progress["bar"] = progress_bar(0)
                                 # Get token usage
-                                metrics = db_proj.conn.execute(
+                                metrics = db_proj.execute(
                                     "SELECT SUM(input_tokens), SUM(output_tokens), SUM(cost_usd), "
                                     "SUM(duration_ms) FROM agent_metrics WHERE task_id = ?",
                                     (task_id,)
@@ -292,9 +294,9 @@ class Conductor:
         # Collect all pending tasks across all projects
         all_tasks: list[tuple[ProjectConfig, dict]] = []
         for project in self.projects:
-            db = self._connect_db(project.db_path)
+            db, task_repo, _esc_repo = self._connect_repos(project.db_path)
             try:
-                for task_dict in db.get_pending_tasks():
+                for task_dict in task_repo.get_pending():
                     all_tasks.append((project, task_dict))
             finally:
                 db.close()
@@ -337,9 +339,11 @@ class Conductor:
                       task_dict: Optional[dict] = None) -> Optional[str]:
         """在线程中执行单个任务。task_dict=None 时自动取第一个 pending。"""
         db = self._connect_db(db_path)
+        task_repo = TaskRepository(db)
+        esc_repo = EscalationRepository(db)
         try:
             if task_dict is None:
-                pending = db.get_pending_tasks()
+                pending = task_repo.get_pending()
                 if not pending:
                     return None
                 task_dict = pending[0]
@@ -365,11 +369,11 @@ class Conductor:
                     if result_id is None:
                         self.state.tasks_failed += 1
 
-                task_after = db.get_task(task_id)
+                task_after = task_repo.get_task(task_id)
                 if task_after:
                     status = task_after.get("status")
                     if status == "escalated":
-                        self._record_escalation_for_task(db, task_after)
+                        self._record_escalation_for_task(esc_repo, task_after)
                         self._notify("escalated", task_id, project.name, task_after)
                         with self._lock:
                             self.state.escalations_detected += 1
@@ -384,7 +388,7 @@ class Conductor:
                 with self._lock:
                     self.state.tasks_failed += 1
                 self.log.error("Workflow error for %s: %s", task_id, e)
-                db.record_escalation(
+                esc_repo.record(
                     task_id=task_id, step_id="conductor",
                     reason=f"Workflow execution error: {e}",
                 )
@@ -410,15 +414,17 @@ class Conductor:
                 return None
 
         db = self._connect_db(project.db_path)
+        task_repo = TaskRepository(db)
+        esc_repo = EscalationRepository(db)
         try:
-            task = db.get_task(task_id)
+            task = task_repo.get_task(task_id)
             if not task or task.get("status") != "escalated":
                 return None
 
-            db.update_task_status(task_id, "running")
-            for esc in db.get_pending_escalations():
+            task_repo.update_status(task_id, "running")
+            for esc in esc_repo.get_pending():
                 if esc["task_id"] == task_id:
-                    db.resolve_escalation(esc["id"], "retry")
+                    esc_repo.resolve(esc["id"], "retry")
 
             return self._workflow_service.execute(
                 db_path=project.db_path,
@@ -431,10 +437,18 @@ class Conductor:
 
     # ── Internal ──
 
-    def _connect_db(self, db_path: Path):
+    @staticmethod
+    def _connect_db(db_path: Path):
         db = StateDB(db_path)
         db.connect()
         return db
+
+    @staticmethod
+    def _connect_repos(db_path: Path):
+        """Open DB and create TaskRepository + EscalationRepository."""
+        db = StateDB(db_path)
+        db.connect()
+        return db, TaskRepository(db), EscalationRepository(db)
 
     def _monitor_loop(self):
         """主监控循环 — 每轮并行处理所有 pending 任务"""
@@ -496,8 +510,10 @@ class Conductor:
             project = self.projects[0]
         db = self._connect_db(project.db_path)
         try:
-            for task_dict in db.get_escalated_tasks():
-                self._record_escalation_for_task(db, task_dict)
+            task_repo = TaskRepository(db)
+            esc_repo = EscalationRepository(db)
+            for task_dict in task_repo.get_escalated():
+                self._record_escalation_for_task(esc_repo, task_dict)
         finally:
             db.close()
 
@@ -509,7 +525,7 @@ class Conductor:
             project = self.projects[0]
         db = self._connect_db(project.db_path)
         try:
-            row = db.conn.execute(
+            row = db.execute(
                 "SELECT status FROM workflow_state WHERE workflow_id = ?",
                 ("conductor",)
             ).fetchone()
@@ -517,18 +533,17 @@ class Conductor:
                 self.log.info("Received stop signal via workflow_state for %s", project.name)
                 self.state.running = False
                 # Clear the signal
-                db.conn.execute(
+                db.execute_write(
                     "DELETE FROM workflow_state WHERE workflow_id = ?",
                     ("conductor",)
                 )
-                db.conn.commit()
         finally:
             db.close()
 
-    def _record_escalation_for_task(self, db: StateDB, task_dict: dict):
+    def _record_escalation_for_task(self, esc_repo, task_dict: dict):
         """为 escalated 任务记录升级事件"""
         task_id = task_dict["id"]
-        for esc in db.get_pending_escalations():
+        for esc in esc_repo.get_pending():
             if esc["task_id"] == task_id:
                 return
 
@@ -538,7 +553,7 @@ class Conductor:
             f"Task escalated at step '{step_id}' after {rejection_count} rejections. "
             f"Human intervention required."
         )
-        db.record_escalation(
+        esc_repo.record(
             task_id=task_id, step_id=step_id, reason=reason,
             context={
                 "task_type": task_dict.get("type"),

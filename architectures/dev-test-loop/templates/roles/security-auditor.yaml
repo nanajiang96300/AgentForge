@@ -1,0 +1,17 @@
+name: security-auditor
+description: 安全审计员 — 审查代码安全漏洞、OWASP Top 10、权限模型
+model: deepseek-v4-pro
+personality: paranoid, meticulous, adversarial
+skill: architectures/dev-test-loop/skills/security-auditor/SKILL.md
+output_required:
+  - vulnerabilities
+  - severity
+  - affected_files
+  - remediation
+  - owasp_category
+permissions:
+  read: [src/, tests/, docs/]
+  write: [docs/security/, .agents/memory/security-auditor/]
+  deny: [src/, tests/]
+timeout: 600
+session: per-issue

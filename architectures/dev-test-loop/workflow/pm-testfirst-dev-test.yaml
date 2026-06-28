@@ -1,0 +1,62 @@
+workflow:
+  id: "pm-testfirst-dev-test-loop"
+  version: "1.0"
+  description: "PM analyzes → Test writes failing tests → Dev minimal implementation → Test verifies"
+
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      description: "分析需求，产出验收标准和任务拆解"
+      timeout: 300
+      retry: {max: 2, backoff: "exponential"}
+      input:
+        from: "task.context"
+        fields: ["requirements_text", "source_file"]
+      output:
+        required: ["root_cause", "target_module", "complexity", "complexity_rationale", "task_breakdown", "acceptance_criteria", "estimated_files"]
+      on_success: {to_state: "assigned"}
+
+    - id: "test_write"
+      agent: "test"
+      description: "基于验收标准编写一定会失败的测试 (RED 阶段)"
+      depends_on: "pm_analyze"
+      timeout: 300
+      input:
+        from: "pm_analyze.output"
+        fields: ["acceptance_criteria", "target_module"]
+      output:
+        required: ["test_file_path", "test_cases", "expected_failures"]
+
+    - id: "dev_implement"
+      agent: "dev"
+      description: "最小实现让测试通过 (GREEN 阶段)，严格 YAGNI"
+      depends_on: "test_write"
+      timeout: 600
+      retry: {max: 3, backoff: "exponential"}
+      input:
+        from: "test_write.output"
+        fields: ["test_file_path", "test_cases"]
+      output:
+        required: ["branch_name", "files_changed", "implementation_summary"]
+      guard:
+        forbidden_paths: ["tests/"]
+
+    - id: "test_verify"
+      agent: "test"
+      description: "运行全部测试套件，验证验收标准"
+      depends_on: "dev_implement"
+      timeout: 300
+      input:
+        from: "dev_implement.output"
+        fields: ["branch_name", "test_file_path", "files_changed"]
+      output:
+        required: ["verdict", "test_summary", "tests_total", "tests_passed", "tests_failed"]
+      on_verdict_approved: {action: "mark_complete"}
+      on_verdict_rejected:
+        next: "dev_implement"
+        increment_rejection: true
+        guard: "rejection_count < 3"
+
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

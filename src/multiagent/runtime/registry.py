@@ -126,6 +126,17 @@ _builtin_configs = [
         output_required=["root_cause", "target_module", "complexity", "task_breakdown", "estimated_files"],
     ),
     AgentConfig(
+        name="architect",
+        description="架构设计师 — 设计系统架构、生成 C4 图 + ADR、技术选型",
+        model="deepseek-v4-pro",
+        permissions={"write": ["docs/architecture/"], "read": ["src/", "docs/", "architectures/"], "deny": ["src/", "tests/"]},
+        skill="architectures/dev-test-loop/skills/architect/SKILL.md",
+        memory=".agents/memory/architect/",
+        session="per-issue",
+        timeout=600,
+        output_required=["architecture_doc", "adrs", "component_diagram", "tech_stack", "tradeoffs"],
+    ),
+    AgentConfig(
         name="dev",
         description="Developer — implement features and fix bugs",
         model="deepseek/deepseek-chat",

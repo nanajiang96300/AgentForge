@@ -27,7 +27,7 @@ def calculate_task_progress(db, task_id: str) -> dict:
     }
 
     # Get all steps for this task
-    rows = db.conn.execute(
+    rows = db.execute(
         "SELECT step_id, agent, status FROM step_results "
         "WHERE task_id = ? ORDER BY id",
         (task_id,)
@@ -98,7 +98,7 @@ def _estimate_subtasks(db, task_id: str, result: dict):
     import json as _json
 
     # Find the latest completed step with output
-    row = db.conn.execute(
+    row = db.execute(
         "SELECT step_id, output FROM step_results "
         "WHERE task_id = ? AND status = 'completed' AND output IS NOT NULL "
         "ORDER BY id DESC LIMIT 1",

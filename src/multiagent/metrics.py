@@ -10,7 +10,7 @@ def summary(db):
 
 def by_agent(db):
     # Query distinct agents from DB (no hardcoded list)
-    agents = db.conn.execute(
+    agents = db.execute(
         "SELECT DISTINCT agent FROM agent_metrics ORDER BY agent"
     ).fetchall()
     for (a,) in agents:
@@ -19,7 +19,7 @@ def by_agent(db):
             print(f"  {a:<12} {s['total_calls']:>4} calls  {s['total_input_tokens']:>10,} in  ${s['total_cost_usd']:>8.4f}")
 
 def export_csv(db, path="metrics_export.csv"):
-    rows = db.conn.execute("""SELECT task_id,step_id,agent,adapter,model,duration_ms,
+    rows = db.execute("""SELECT task_id,step_id,agent,adapter,model,duration_ms,
         input_tokens,output_tokens,cost_usd,status,recorded_at FROM agent_metrics ORDER BY recorded_at""")
     with open(path,"w",newline="") as f:
         w = csv.writer(f)

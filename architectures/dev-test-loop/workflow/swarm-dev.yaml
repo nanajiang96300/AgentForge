@@ -1,0 +1,64 @@
+workflow:
+  id: "swarm-dev-loop"
+  version: "1.0"
+  description: "Swarms模式 — 多个同质Dev Agent并行从任务队列抢任务执行"
+
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      description: "分析需求，拆解为多个独立子任务放入任务队列"
+      timeout: 300
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["root_cause", "complexity", "task_breakdown", "acceptance_criteria"]
+      on_success: {to_state: "assigned"}
+
+    - id: "dev_swarm_1"
+      agent: "dev"
+      description: "Dev #1 — 从任务队列取第一个子任务执行"
+      depends_on: "pm_analyze"
+      timeout: 600
+      retry: {max: 2}
+      input:
+        from: "pm_analyze.output"
+        fields: ["task_breakdown", "acceptance_criteria"]
+
+    - id: "dev_swarm_2"
+      agent: "dev"
+      description: "Dev #2 — 从任务队列取第二个子任务执行"
+      depends_on: "pm_analyze"
+      timeout: 600
+      retry: {max: 2}
+      input:
+        from: "pm_analyze.output"
+        fields: ["task_breakdown", "acceptance_criteria"]
+
+    - id: "dev_swarm_3"
+      agent: "dev"
+      description: "Dev #3 — 从任务队列取第三个子任务执行"
+      depends_on: "pm_analyze"
+      timeout: 600
+      retry: {max: 2}
+      input:
+        from: "pm_analyze.output"
+        fields: ["task_breakdown", "acceptance_criteria"]
+
+    - id: "test_verify"
+      agent: "test"
+      description: "汇总所有Dev的结果，运行全量测试验证"
+      depends_on: ["dev_swarm_1", "dev_swarm_2", "dev_swarm_3"]
+      timeout: 300
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_approved: {action: "mark_complete"}
+      on_verdict_rejected:
+        next: "pm_analyze"
+        increment_rejection: true
+        guard: "rejection_count < 3"
+
+  error_policy:
+    max_rejections: 3
+    escalation_target: "console"

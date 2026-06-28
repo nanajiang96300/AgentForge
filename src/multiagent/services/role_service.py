@@ -299,6 +299,167 @@ class RoleService:
             AgentRegistry.load_from_yaml(roles_path)
 
 
+class RoleTemplateService:
+    """Role template loader — list, load, validate, and instantiate roles from built-in or YAML templates."""
+
+    TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "architectures" / "dev-test-loop" / "templates" / "roles"
+
+    _BUILTIN_TEMPLATES: dict[str, dict] = {
+        "architect": {
+            "description": "架构设计师 — 设计系统架构、生成 C4 图 + ADR、技术选型",
+            "model": "deepseek-v4-pro",
+            "permissions": {"write": ["docs/architecture/"], "read": ["src/", "docs/", "architectures/"], "deny": ["src/", "tests/"]},
+            "skill": "architectures/dev-test-loop/skills/architect/SKILL.md",
+            "memory": ".agents/memory/architect/",
+            "session": "per-issue",
+            "personality": "visionary, systematic, principled",
+            "timeout": 600,
+            "output_required": ["architecture_doc", "adrs", "component_diagram", "tech_stack", "tradeoffs"],
+        },
+        "security-auditor": {
+            "description": "Security Auditor — analyze code for vulnerabilities, generate security reports",
+            "model": "deepseek-v4-pro",
+            "permissions": {"write": ["docs/security/"], "read": ["src/", "docs/", "tests/"], "deny": ["src/", "tests/"]},
+            "skill": "architectures/dev-test-loop/skills/security-auditor/SKILL.md",
+            "memory": ".agents/memory/security-auditor/",
+            "session": "per-issue",
+            "personality": "paranoid, thorough, precise",
+            "timeout": 600,
+            "output_required": ["vulnerabilities", "risk_level", "recommendations", "severity_matrix"],
+        },
+        "code-reviewer": {
+            "description": "Code Reviewer — review pull requests for quality and correctness",
+            "model": "deepseek-v4-pro",
+            "permissions": {"write": ["docs/reviews/"], "read": ["src/", "tests/", "docs/"], "deny": ["src/", "tests/"]},
+            "skill": "architectures/dev-test-loop/skills/code-reviewer/SKILL.md",
+            "memory": ".agents/memory/code-reviewer/",
+            "session": "per-issue",
+            "personality": "meticulous, constructive, objective",
+            "timeout": 300,
+            "output_required": ["review_summary", "issues", "suggestions", "verdict"],
+        },
+        "performance-optimizer": {
+            "description": "Performance Optimizer — profile and optimize application performance",
+            "model": "deepseek-v4-pro",
+            "permissions": {"write": ["docs/performance/"], "read": ["src/", "tests/", "docs/"], "deny": ["src/", "tests/"]},
+            "skill": "architectures/dev-test-loop/skills/performance-optimizer/SKILL.md",
+            "memory": ".agents/memory/performance-optimizer/",
+            "session": "per-issue",
+            "personality": "analytical, data-driven, precise",
+            "timeout": 600,
+            "output_required": ["bottlenecks", "metrics", "optimizations", "expected_impact", "benchmarks"],
+        },
+    }
+
+    def list_builtins(self) -> list[str]:
+        """List available built-in template names."""
+        builtins = sorted(self._BUILTIN_TEMPLATES.keys())
+        # Also include YAML templates
+        if self.TEMPLATE_DIR.exists():
+            yaml_templates = sorted(f.stem for f in self.TEMPLATE_DIR.glob("*.yaml"))
+            for t in yaml_templates:
+                if t not in builtins:
+                    builtins.append(t)
+        return builtins
+
+    def list_user_templates(self) -> list[str]:
+        """List user-defined templates (those whose name starts with ``user-``)."""
+        return [t for t in self.list_builtins() if t.startswith("user-")]
+
+    def load(self, name: str) -> dict:
+        """Load a template by name. Prefers YAML files over built-in templates.
+
+        Raises:
+            ValueError: If the template does not exist.
+        """
+        import yaml
+
+        path = self.TEMPLATE_DIR / f"{name}.yaml"
+        if path.exists():
+            data = yaml.safe_load(path.read_text())
+            data["name"] = data.get("name", name)
+            return data
+
+        if name in self._BUILTIN_TEMPLATES:
+            result = dict(self._BUILTIN_TEMPLATES[name])
+            result["name"] = name
+            return result
+
+        raise ValueError(f"Template not found: {name}")
+
+    def validate_template(self, name: str) -> list[str]:
+        """Validate that a template has all required fields.
+
+        Returns a list of issue strings (empty = valid).
+        """
+        issues: list[str] = []
+        try:
+            data = self.load(name)
+        except Exception as exc:
+            return [f"Cannot load template: {exc}"]
+
+        required = ["name", "description", "model", "skill", "output_required"]
+        for field in required:
+            if field not in data:
+                issues.append(f"Missing required field: {field}")
+
+        if "output_required" in data and not isinstance(data["output_required"], list):
+            issues.append("output_required must be a list")
+
+        return issues
+
+    def create_from_template(
+        self, template_name: str, name: str, model: str = None, **overrides
+    ) -> AgentConfig:
+        """Create an AgentConfig from a built-in or YAML template and register it.
+
+        Args:
+            template_name: Base template to use (e.g. 'architect').
+            name: New role name (overrides template ``name``).
+            model: Optional model override.
+            **overrides: Additional fields to override in the template data.
+
+        Returns:
+            The registered AgentConfig.
+
+        Raises:
+            ValueError: If template_name is unknown or name already exists.
+        """
+        # Load template data — checks built-ins first, then YAML
+        try:
+            data = self.load(template_name)
+        except ValueError:
+            raise ValueError(f"Unknown template: '{template_name}'. Available: {', '.join(self.list_builtins())}")
+
+        # Normalize name
+        name_clean = name.strip().lower()
+        if not name_clean:
+            raise ValueError("Role name is required")
+
+        data["name"] = name_clean
+        if model:
+            data["model"] = model
+        data.update(overrides)
+
+        config = AgentConfig(
+            name=data["name"],
+            description=data.get("description", ""),
+            model=data.get("model", ""),
+            personality=data.get("personality", ""),
+            permissions=dict(data.get("permissions", {"write": [], "read": [], "deny": []})),
+            skill=data.get("skill", ""),
+            memory=f".agents/memory/{name_clean}/",
+            session=data.get("session", "per-issue"),
+            runtime=data.get("runtime", ""),
+            timeout=data.get("timeout", 600),
+            output_required=list(data.get("output_required", [])),
+        )
+        AgentRegistry.register(config)
+        _persist_to_yaml(name_clean, config)
+        _log.info("Role '%s' created from template '%s'", name_clean, template_name)
+        return config
+
+
 def _generate_skill(name: str, description: str, model: str,
                     output_required: list[str], runtime: str) -> Optional[Path]:
     """Generate SKILL.md from skeleton template."""

@@ -1,0 +1,17 @@
+name: code-reviewer
+description: 代码审查员 — 审查代码质量、最佳实践、可维护性
+model: deepseek-v4-flash
+personality: detail-oriented, constructive, pragmatic
+skill: architectures/dev-test-loop/skills/code-reviewer/SKILL.md
+output_required:
+  - review_summary
+  - issues_found
+  - severity_per_issue
+  - recommendations
+  - overall_verdict
+permissions:
+  read: [src/, tests/]
+  write: [.agents/memory/code-reviewer/]
+  deny: [src/, tests/]
+timeout: 300
+session: per-pr
