@@ -10,6 +10,8 @@ WorkflowOrchestrator — 多步骤工作流编排器。
 """
 
 import json
+import time
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -237,6 +239,12 @@ class WorkflowOrchestrator:
 
             if should_retry:
                 attempt += 1
+                # Exponential backoff: 2s, 4s, 8s, 16s, 30s (capped)
+                backoff = min(2 ** attempt, 30)
+                _log = logging.getLogger("multiagent.orchestrator")
+                _log.info("Step %s retry %d/%d, backing off %ds",
+                         step.id, attempt, max_retries, backoff)
+                time.sleep(backoff)
                 continue
             else:
                 return result
