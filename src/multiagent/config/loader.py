@@ -33,13 +33,21 @@ def find_state_db(start: Path = None) -> Path:
     return start / "state.db"
 
 
-def find_workflow_yaml(start: Path = None) -> Path | None:
-    """Find the default pm-dev-test workflow YAML."""
+def find_workflow_yaml(start: Path = None, prefer_tdd: bool = True) -> Path | None:
+    """Find the default workflow YAML. Prefers TDD workflow by default (v1.0)."""
     if start is None:
         start = Path.cwd()
 
+    workflow_dir = start / "architectures" / "dev-test-loop" / "workflow"
+
+    # v1.0: TDD workflow is the recommended default
+    if prefer_tdd:
+        tdd_wf = workflow_dir / "pm-testfirst-dev-test.yaml"
+        if tdd_wf.exists():
+            return tdd_wf
+
     candidates = [
-        start / "architectures" / "dev-test-loop" / "workflow" / "pm-dev-test.yaml",
+        workflow_dir / "pm-dev-test.yaml",
     ]
     for p in candidates:
         if p.exists():
@@ -54,6 +62,25 @@ def find_workflow_yaml(start: Path = None) -> Path | None:
         pass
 
     return None
+
+
+def select_workflow(task_type: str = "feature", complexity: str = "medium") -> str:
+    """Select the best workflow for a task based on type and complexity.
+
+    v1.0 workflow selection:
+    - simple/low complexity → traditional (pm-dev-test, 3 steps, fast)
+    - feature/medium+ → TDD (pm-testfirst-dev-test, 4 steps, with acceptance criteria)
+    - architecture/design → architect (pm-architect-test, 3 steps)
+    - parallel subtasks → swarm (swarm-dev, parallel Dev agents)
+    """
+    if task_type in ("architecture", "design"):
+        return "pm-architect-test"
+    if task_type == "parallel":
+        return "swarm-dev"
+    if complexity in ("low", "simple"):
+        return "pm-dev-test"
+    # Default: TDD for feature/bug/medium+
+    return "pm-testfirst-dev-test"
 
 
 def find_roles_yaml(start: Path = None) -> Path | None:
