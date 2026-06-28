@@ -40,8 +40,12 @@ class URLParser:
         critical_errors: list[str] = []
         warnings: list[str] = []
 
-        # ── Edge case: empty or non-string ──────────────────────────────
-        if not url or not isinstance(url, str):
+        # ── Edge case: non-string input ────────────────────────────────────
+        if not isinstance(url, str):
+            raise TypeError(f"URL must be a string, got {type(url).__name__}")
+
+        # ── Edge case: empty string ──────────────────────────────────────
+        if not url:
             return {
                 "valid": False,
                 "protocol": "",
@@ -50,7 +54,7 @@ class URLParser:
                 "path": "",
                 "query": {},
                 "fragment": "",
-                "errors": ["Empty URL"] if not url else ["Invalid input"],
+                "errors": ["Empty URL"],
             }
 
         protocol = ""
