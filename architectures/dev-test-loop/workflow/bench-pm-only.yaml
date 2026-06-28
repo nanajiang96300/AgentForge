@@ -1,0 +1,17 @@
+workflow:
+  id: "bench-pm-only"
+  version: "1.0"
+  description: "Benchmark: PM standalone analysis"
+
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      description: "单独分析需求，产出验收标准"
+      timeout: 300
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["root_cause", "complexity", "complexity_rationale", "task_breakdown", "acceptance_criteria"]
+      on_success: {action: "mark_complete"}

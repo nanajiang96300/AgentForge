@@ -1,0 +1,17 @@
+workflow:
+  id: "bench-dev-only"
+  version: "1.0"
+  description: "Benchmark: Dev standalone implementation with hardcoded spec"
+
+  steps:
+    - id: "dev_implement"
+      agent: "dev"
+      description: "基于明确 spec 最小实现，不依赖 PM 分析"
+      timeout: 600
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["branch_name", "files_changed", "implementation_summary"]
+      on_success: {action: "mark_complete"}

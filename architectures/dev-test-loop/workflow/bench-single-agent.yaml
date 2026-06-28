@@ -1,0 +1,17 @@
+workflow:
+  id: "bench-single-agent"
+  version: "1.0"
+  description: "Benchmark: Single agent does everything"
+
+  steps:
+    - id: "solo_task"
+      agent: "dev"
+      description: "独立完成需求分析、实现和测试验证"
+      timeout: 900
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["implementation_summary", "files_changed", "test_results"]
+      on_success: {action: "mark_complete"}

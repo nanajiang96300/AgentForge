@@ -1,0 +1,48 @@
+workflow:
+  id: "pm-architect-test-loop"
+  version: "1.0"
+  description: "PM分析需求 → Architect设计架构 → Test验证架构文档完整性"
+
+  steps:
+    - id: "pm_analyze"
+      agent: "pm"
+      description: "分析需求，提取架构设计要点"
+      timeout: 300
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["root_cause", "complexity", "complexity_rationale", "task_breakdown", "acceptance_criteria"]
+
+    - id: "architect_design"
+      agent: "architect"
+      description: "基于PM分析设计系统架构: C4图 + ADR + 技术选型"
+      depends_on: "pm_analyze"
+      timeout: 600
+      retry: {max: 2}
+      input:
+        from: "pm_analyze.output"
+        fields: ["root_cause", "task_breakdown", "acceptance_criteria"]
+      output:
+        required: ["architecture_doc", "adrs", "component_diagram", "tech_stack", "tradeoffs"]
+
+    - id: "test_verify"
+      agent: "test"
+      description: "验证架构文档的完整性和一致性"
+      depends_on: "architect_design"
+      timeout: 300
+      input:
+        from: "architect_design.output"
+        fields: ["architecture_doc", "adrs", "component_diagram", "tech_stack", "tradeoffs"]
+      output:
+        required: ["verdict", "test_summary"]
+      on_verdict_approved: {action: "mark_complete"}
+      on_verdict_rejected:
+        next: "architect_design"
+        increment_rejection: true
+        guard: "rejection_count < 2"
+
+  error_policy:
+    max_rejections: 2
+    escalation_target: "console"

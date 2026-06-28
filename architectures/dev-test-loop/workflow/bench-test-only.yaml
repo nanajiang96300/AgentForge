@@ -1,0 +1,17 @@
+workflow:
+  id: "bench-test-only"
+  version: "1.0"
+  description: "Benchmark: Test standalone verification"
+
+  steps:
+    - id: "test_verify"
+      agent: "test"
+      description: "验证已有代码的正确性"
+      timeout: 300
+      retry: {max: 2}
+      input:
+        from: "task.context"
+        fields: ["requirements_text"]
+      output:
+        required: ["verdict", "test_summary", "tests_total", "tests_passed", "tests_failed"]
+      on_success: {action: "mark_complete"}
