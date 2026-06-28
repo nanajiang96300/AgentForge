@@ -39,6 +39,10 @@ agents:
     personality: methodical, careful, act-dont-ask
     session: per-issue
     skill: architectures/dev-test-loop/skills/dev/SKILL.md
+    output_required:
+      - branch_name
+      - files_changed
+      - implementation_summary
   pm:
     description: 项目经理，监控 Git Issue，分析任务根因，按复杂度路由指派 Dev
     memory: .agents/memory/pm/
@@ -59,6 +63,14 @@ agents:
     personality: analytical, thorough, systematic
     session: per-issue
     skill: architectures/dev-test-loop/skills/pm/SKILL.md
+    output_required:
+      - root_cause
+      - target_module
+      - complexity
+      - complexity_rationale
+      - task_breakdown
+      - acceptance_criteria
+      - estimated_files
   test:
     description: 测试工程师，只运行测试和审查代码，不修改源码
     memory: .agents/memory/test/
@@ -74,9 +86,15 @@ agents:
       write:
       - tests/
       - .agents/memory/test/
-    personality: evidence-obsessed, skeptical
+    personality: evidence-obsessed, skeptical, thorough
     session: per-pr
     skill: architectures/dev-test-loop/skills/test/SKILL.md
+    output_required:
+      - verdict
+      - test_summary
+      - tests_total
+      - tests_passed
+      - tests_failed
   user-agent:
     description: 业务闭环驱动者，驱动项目工具链，异常时自动触发基建闭环
     memory: .agents/memory/user-agent/
