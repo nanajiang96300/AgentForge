@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 
 class URLParser:
     """Parses a URL string and validates its components.
@@ -84,9 +86,9 @@ class URLParser:
             for pair in query_str.split("&"):
                 if "=" in pair:
                     k, v = pair.split("=", 1)
-                    query[k] = v
+                    query[unquote(k)] = unquote(v)
                 elif pair:
-                    query[pair] = ""
+                    query[unquote(pair)] = ""
 
         # ── Extract path ────────────────────────────────────────────────
         if "/" in rest:
