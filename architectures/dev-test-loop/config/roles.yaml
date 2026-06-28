@@ -1,4 +1,28 @@
 agents:
+  architect:
+    description: 架构设计师 — 设计系统架构、生成 C4 图 + ADR、技术选型
+    memory: .agents/memory/architect/
+    model: deepseek-v4-pro
+    output_required:
+    - architecture_doc
+    - adrs
+    - component_diagram
+    - tech_stack
+    - tradeoffs
+    permissions:
+      deny:
+      - src/
+      - tests/
+      read:
+      - src/
+      - docs/
+      - architectures/
+      write:
+      - docs/architecture/
+      - .agents/memory/architect/
+    personality: visionary, systematic, principled
+    session: per-issue
+    skill: architectures/dev-test-loop/skills/architect/SKILL.md
   conductor:
     description: Human 唯一入口的总控 Agent，负责翻译自然语言指令为 A2A 任务、分发、汇总状态、汇报结果
     discord:
@@ -23,6 +47,10 @@ agents:
     description: 代码修复专家，在隔离分支工作，禁止修改测试用例
     memory: .agents/memory/dev/
     model: deepseek-v4-pro
+    output_required:
+    - branch_name
+    - files_changed
+    - implementation_summary
     permissions:
       deny:
       - tests/
@@ -39,14 +67,18 @@ agents:
     personality: methodical, careful, act-dont-ask
     session: per-issue
     skill: architectures/dev-test-loop/skills/dev/SKILL.md
-    output_required:
-      - branch_name
-      - files_changed
-      - implementation_summary
   pm:
     description: 项目经理，监控 Git Issue，分析任务根因，按复杂度路由指派 Dev
     memory: .agents/memory/pm/
     model: deepseek-v4-pro
+    output_required:
+    - root_cause
+    - target_module
+    - complexity
+    - complexity_rationale
+    - task_breakdown
+    - acceptance_criteria
+    - estimated_files
     permissions:
       deny:
       - src/
@@ -63,18 +95,16 @@ agents:
     personality: analytical, thorough, systematic
     session: per-issue
     skill: architectures/dev-test-loop/skills/pm/SKILL.md
-    output_required:
-      - root_cause
-      - target_module
-      - complexity
-      - complexity_rationale
-      - task_breakdown
-      - acceptance_criteria
-      - estimated_files
   test:
     description: 测试工程师，只运行测试和审查代码，不修改源码
     memory: .agents/memory/test/
     model: deepseek-v4-flash
+    output_required:
+    - verdict
+    - test_summary
+    - tests_total
+    - tests_passed
+    - tests_failed
     permissions:
       deny:
       - src/
@@ -89,12 +119,32 @@ agents:
     personality: evidence-obsessed, skeptical, thorough
     session: per-pr
     skill: architectures/dev-test-loop/skills/test/SKILL.md
-    output_required:
-      - verdict
-      - test_summary
-      - tests_total
-      - tests_passed
-      - tests_failed
+  test-architect:
+    description: 架构设计师 — 设计系统架构、生成 C4 图 + ADR、技术选型
+    memory: .agents/memory/test-architect/
+    model: deepseek-v4-pro
+    output:
+      required:
+      - architecture_doc
+      - adrs
+      - component_diagram
+      - tech_stack
+      - tradeoffs
+    permissions:
+      deny:
+      - src/
+      - tests/
+      read:
+      - src/
+      - docs/
+      - architectures/
+      write:
+      - docs/architecture/
+    personality: visionary, systematic, principled
+    runtime: ''
+    session: per-issue
+    skill: architectures/dev-test-loop/skills/architect/SKILL.md
+    timeout: 600
   user-agent:
     description: 业务闭环驱动者，驱动项目工具链，异常时自动触发基建闭环
     memory: .agents/memory/user-agent/
