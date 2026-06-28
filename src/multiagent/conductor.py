@@ -353,13 +353,37 @@ class Conductor:
             with self._lock:
                 self.state.current_task_id = task_id
 
-            self.log.info("Executing: %s (project=%s)", task_id, project.name)
+            # Auto-select workflow based on task type/complexity (v1.0.1)
+            task_type = task_dict.get("type", "feature")
+            complexity = "medium"
+            try:
+                rows = db.conn.execute(
+                    "SELECT output FROM step_results WHERE task_id=? AND step_id='pm_analyze' "
+                    "AND status='completed' ORDER BY id DESC LIMIT 1",
+                    (task_id,)
+                ).fetchone()
+                if rows and rows[0]:
+                    output = json.loads(rows[0]) if isinstance(rows[0], str) else rows[0]
+                    complexity = output.get("complexity", "medium")
+            except Exception:
+                pass
+
+            from .config.loader import select_workflow
+            wf_name = select_workflow(task_type, complexity)
+            workflow_dir = project.workflow_path.parent
+            wf_path = workflow_dir / f"{wf_name}.yaml"
+
+            if not wf_path.exists():
+                wf_path = project.workflow_path
+
+            self.log.info("Executing: %s (project=%s, workflow=%s)",
+                          task_id, project.name, wf_name)
             self._notify("started", task_id, project.name, task_dict)
 
             try:
                 result_id = self._workflow_service.execute(
                     db_path=db_path,
-                    workflow_path=str(project.workflow_path),
+                    workflow_path=str(wf_path),
                     task_id=task_id,
                     roles_path=str(project.roles_path) if project.roles_path else None,
                 )
@@ -421,6 +445,28 @@ class Conductor:
             if not task or task.get("status") != "escalated":
                 return None
 
+            # Auto-select workflow for retry (v1.0.1)
+            task_type = task.get("type", "feature")
+            complexity = "medium"
+            try:
+                rows = db.conn.execute(
+                    "SELECT output FROM step_results WHERE task_id=? AND step_id='pm_analyze' "
+                    "AND status='completed' ORDER BY id DESC LIMIT 1",
+                    (task_id,)
+                ).fetchone()
+                if rows and rows[0]:
+                    output = json.loads(rows[0]) if isinstance(rows[0], str) else rows[0]
+                    complexity = output.get("complexity", "medium")
+            except Exception:
+                pass
+
+            from .config.loader import select_workflow
+            wf_name = select_workflow(task_type, complexity)
+            workflow_dir = project.workflow_path.parent
+            wf_path = workflow_dir / f"{wf_name}.yaml"
+            if not wf_path.exists():
+                wf_path = project.workflow_path
+
             task_repo.update_status(task_id, "running")
             for esc in esc_repo.get_pending():
                 if esc["task_id"] == task_id:
@@ -428,7 +474,7 @@ class Conductor:
 
             return self._workflow_service.execute(
                 db_path=project.db_path,
-                workflow_path=str(project.workflow_path),
+                workflow_path=str(wf_path),
                 task_id=task_id,
                 roles_path=str(project.roles_path) if project.roles_path else None,
             )
