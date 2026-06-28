@@ -101,7 +101,7 @@ def submit_issue_as_task(issue: dict, db, workflow_id: str = "pm-dev-test-loop")
     task_id = f"task-gh-{issue['number']}-{uuid.uuid4().hex[:6]}"
 
     # Check dedup
-    existing = db.conn.execute(
+    existing = db.execute(
         "SELECT id FROM tasks WHERE dedup_key = ?", (f"gh-{issue['number']}",)
     ).fetchone()
     if existing:

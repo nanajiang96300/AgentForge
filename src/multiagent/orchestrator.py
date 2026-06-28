@@ -20,6 +20,7 @@ from typing import Optional
 from .core.conditions import ConditionEvaluator
 from .db import StateDB, Task, now_iso
 from .engine import AgentSpawner, StepResult, StepStatus, load_yaml
+from .persistence.task_repo import TaskRepository
 from .interfaces import StepHook  # noqa: F401
 
 
@@ -71,6 +72,7 @@ class WorkflowOrchestrator:
             evaluator = ConditionEvaluator()
         self._evaluator = evaluator
         self.db = db
+        self._task_repo = TaskRepository(db)
         self.spawner = spawner
         self.workflow_path = workflow_path
         self.workflow_def: dict = {}
@@ -194,7 +196,7 @@ class WorkflowOrchestrator:
             self._total_executions += 1
             if self._total_executions > self.MAX_TOTAL_STEP_EXECUTIONS:
                 step.state = StepState.FAILED
-                self.db.update_task_status(task.id, "escalated", step.id)
+                self._task_repo.update_status(task.id, "escalated", step.id)
                 self._fire_hook("on_escalation", task.id, step.id, "Global cap exceeded")
                 return StepResult(
                     step_id=step.id, agent=step.agent,
@@ -205,7 +207,7 @@ class WorkflowOrchestrator:
             # ── Per-step retry cap ──
             if attempt > max_retries:
                 step.state = StepState.FAILED
-                self.db.update_task_status(task.id, "escalated", step.id)
+                self._task_repo.update_status(task.id, "escalated", step.id)
                 self._fire_hook("on_escalation", task.id, step.id, "Retry cap exceeded")
                 return StepResult(
                     step_id=step.id, agent=step.agent,
@@ -266,12 +268,12 @@ class WorkflowOrchestrator:
             if step.on_verdict_approved and verdict == "approved":
                 approved_action = step.on_verdict_approved.get("action", "")
                 if approved_action == "mark_complete":
-                    self.db.update_task_status(task.id, "completed", step.id)
+                    self._task_repo.update_status(task.id, "completed", step.id)
 
             # 成功后的动作 (pm_analyze on_success)
             action = step.on_success.get("action", "")
             if "assigned" in action or step.on_success.get("to_state"):
-                self.db.update_task_status(task.id, step.on_success.get("to_state", "assigned"), step.id)
+                self._task_repo.update_status(task.id, step.on_success.get("to_state", "assigned"), step.id)
 
         elif result.status in (StepStatus.CRASHED, StepStatus.TIMED_OUT):
             step.state = StepState.PENDING
@@ -286,7 +288,7 @@ class WorkflowOrchestrator:
 
     def _handle_rejection(self, task: Task, step: WorkflowStep, result: StepResult) -> bool:
         """处理 Test Agent 的打回。返回 True 表示需要重试 dev 步骤。"""
-        rejection_count = self.db.increment_rejection(task.id)
+        rejection_count = self._task_repo.increment_rejection(task.id)
         max_rejections = self.workflow_def.get("workflow", {}).get("error_policy", {}).get("max_rejections", 3)
 
         if rejection_count < max_rejections:
@@ -306,7 +308,7 @@ class WorkflowOrchestrator:
         else:
             # 超过重试上限 → escalated
             step.state = StepState.FAILED
-            self.db.update_task_status(task.id, "escalated", step.id)
+            self._task_repo.update_status(task.id, "escalated", step.id)
             self._fire_hook("on_escalation", task.id, step.id, f"Max rejections ({max_rejections}) reached")
             return False
 

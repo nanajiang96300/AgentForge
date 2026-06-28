@@ -7,7 +7,7 @@ agents:
       - 指挥中心
       - 系统告警
     memory: .agents/memory/conductor/
-    model: deepseek/deepseek-chat
+    model: deepseek-v4-flash
     permissions:
       deny: []
       read:
@@ -22,7 +22,7 @@ agents:
   dev:
     description: 代码修复专家，在隔离分支工作，禁止修改测试用例
     memory: .agents/memory/dev/
-    model: deepseek/deepseek-chat
+    model: deepseek-v4-pro
     permissions:
       deny:
       - tests/
@@ -42,7 +42,7 @@ agents:
   pm:
     description: 项目经理，监控 Git Issue，分析任务根因，按复杂度路由指派 Dev
     memory: .agents/memory/pm/
-    model: deepseek/deepseek-chat
+    model: deepseek-v4-pro
     permissions:
       deny:
       - src/
@@ -62,7 +62,7 @@ agents:
   test:
     description: 测试工程师，只运行测试和审查代码，不修改源码
     memory: .agents/memory/test/
-    model: deepseek/deepseek-chat
+    model: deepseek-v4-flash
     permissions:
       deny:
       - src/
@@ -80,7 +80,7 @@ agents:
   user-agent:
     description: 业务闭环驱动者，驱动项目工具链，异常时自动触发基建闭环
     memory: .agents/memory/user-agent/
-    model: deepseek/deepseek-chat
+    model: deepseek-v4-pro
     permissions:
       deny: []
       read:

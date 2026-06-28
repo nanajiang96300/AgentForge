@@ -260,7 +260,7 @@ class NotifierStepHook:
         if not self._db:
             return {}
         try:
-            rows = self._db.conn.execute(
+            rows = self._db.execute(
                 "SELECT output FROM step_results WHERE task_id=? AND step_id=? AND status='completed' ORDER BY id DESC LIMIT 1",
                 (task_id, step_id)).fetchall()
             if rows and rows[0][0]:
