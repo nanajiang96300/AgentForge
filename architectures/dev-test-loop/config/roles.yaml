@@ -21,6 +21,7 @@ agents:
       - docs/architecture/
       - .agents/memory/architect/
     personality: visionary, systematic, principled
+    timeout: 900
     session: per-issue
     skill: architectures/dev-test-loop/skills/architect/SKILL.md
   conductor:
