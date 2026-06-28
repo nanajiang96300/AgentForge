@@ -1,5 +1,5 @@
 """MultiAgent — 多智能体协同开发框架"""
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # CLI re-exports for external consumers
 from .cli.run import parse_run_args, cmd_run  # noqa: F401
