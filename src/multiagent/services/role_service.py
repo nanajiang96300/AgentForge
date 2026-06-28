@@ -302,7 +302,7 @@ class RoleService:
 class RoleTemplateService:
     """Role template loader — list, load, validate, and instantiate roles from built-in or YAML templates."""
 
-    TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "architectures" / "dev-test-loop" / "templates" / "roles"
+    TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "architectures" / "dev-test-loop" / "templates" / "roles"
 
     _BUILTIN_TEMPLATES: dict[str, dict] = {
         "architect": {
@@ -367,21 +367,25 @@ class RoleTemplateService:
         return [t for t in self.list_builtins() if t.startswith("user-")]
 
     def load(self, name: str) -> dict:
-        """Load a template by name. Checks built-in templates first, then YAML files.
+        """Load a template by name. Prefers YAML files over built-in templates.
 
         Raises:
             ValueError: If the template does not exist.
         """
+        import yaml
+
+        path = self.TEMPLATE_DIR / f"{name}.yaml"
+        if path.exists():
+            data = yaml.safe_load(path.read_text())
+            data["name"] = data.get("name", name)
+            return data
+
         if name in self._BUILTIN_TEMPLATES:
             result = dict(self._BUILTIN_TEMPLATES[name])
             result["name"] = name
             return result
 
-        import yaml
-        path = self.TEMPLATE_DIR / f"{name}.yaml"
-        if not path.exists():
-            raise ValueError(f"Template not found: {name}")
-        return yaml.safe_load(path.read_text())
+        raise ValueError(f"Template not found: {name}")
 
     def validate_template(self, name: str) -> list[str]:
         """Validate that a template has all required fields.

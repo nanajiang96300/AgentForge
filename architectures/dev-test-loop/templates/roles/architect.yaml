@@ -1,0 +1,17 @@
+name: architect
+description: 架构设计师 — 设计系统架构、生成 ADR、产出架构文档
+model: deepseek-v4-pro
+personality: visionary, systematic, principled
+skill: architectures/dev-test-loop/skills/architect/SKILL.md
+output_required:
+  - architecture_doc
+  - adrs
+  - component_diagram
+  - tech_stack
+  - tradeoffs
+permissions:
+  read: [src/, docs/, architectures/]
+  write: [docs/architecture/, .agents/memory/architect/]
+  deny: [src/, tests/]
+timeout: 600
+session: per-issue
